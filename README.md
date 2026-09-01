@@ -8,7 +8,7 @@ it. It is drawn every frame rather than blitted from a spritesheet, so its
 glass, its tint and its resting temper are settings — and changing one of them
 morphs on screen instead of cutting, which no sheet of drawings can do.
 
-![The orb in each of its moods, and the seven palettes it can wear](preview.png)
+![Iris standing on an Omarchy desktop with an order typed into its form](preview.png)
 
 Omarchy Iris is a fork of
 [Omarchy Companion](https://github.com/moerdowo/omarchy-companion) with its
@@ -133,6 +133,8 @@ The **Companion** section of the bar popout has three more choices when the
 orb is worn. Each one morphs rather than cuts: a state is a set of numbers
 describing one wave, so going from any state to any other is an interpolation
 of those numbers, and a temper slides the same way.
+
+![The orb in each of its moods, and the seven palettes it can wear](docs/moods.png)
 
 **Glass** — five treatments: glass, clear, frosted, halo, bare. `glass` is the
 default: a dark crown, light pooled at the floor, a rim and a specular
@@ -290,7 +292,7 @@ and that every state paints — and `tests/iris.test.mjs` holds those.
 One generator, not run at install time:
 
 ```bash
-tools/build-preview    # redraws preview.png and docs/tempers.png
+tools/build-preview    # redraws docs/moods.png and docs/tempers.png
 ```
 
 It needs Qt's `qml` tool, because it draws the sheets with the plugin's own

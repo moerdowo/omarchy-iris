@@ -118,7 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           for f in README.md LICENSE SECURITY.md THIRD_PARTY_NOTICES.md \
-                   preview.png docs/tempers.png; do
+                   preview.png docs/moods.png docs/tempers.png; do
             [[ -s $f ]] || { echo "missing or empty: $f" >&2; exit 1; }
           done
           version=$(jq -r .version manifest.json)

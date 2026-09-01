@@ -94,6 +94,13 @@ inherits and must not share. All three are renamed for this plugin:
   change had to be made twice or the pictures stopped being of the thing they
   claimed to show.
 - Replaced `docs/expressions.png` with `docs/tempers.png`.
+- Made the root `preview.png` a staged screenshot of the running orb — one orb
+  at the size a person sees it, with an order typed into the form — and moved
+  the generated mood-and-tint sheet to `docs/moods.png`. The marketplace draws
+  a listing card by centre-cropping the preview to roughly 1.9:1 inside a fixed
+  175px-tall panel, so the wide sheet of labelled cells arrived there as an
+  unreadable middle slice of itself. How the screenshot is staged is recorded
+  in `docs/development.md`; `tools/build-preview` no longer writes it.
 - Fixed a latent sizing bug inherited from the previous body: rebuilding the
   engine on a size change read the radius from a binding that is not
   guaranteed to have updated yet, so the orb could keep whatever size it was

@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Draw the repository's two picture sheets: preview.png and docs/tempers.png.
+# Draw the repository's two drawn sheets: docs/moods.png and docs/tempers.png.
 #
-# These are the only images the project ships, and both are drawn by the SHELL'S
-# OWN renderer rather than by a second implementation of it. The character this
-# replaced had its previews emitted as SVG by a script that walked the engine's
-# frames and re-drew them by hand — which worked, and which meant every change
-# to the renderer had to be made twice or the pictures quietly stopped being of
-# the thing they claimed to show.
+# Both are drawn by the SHELL'S OWN renderer rather than by a second
+# implementation of it. The character this replaced had its previews emitted as
+# SVG by a script that walked the engine's frames and re-drew them by hand —
+# which worked, and which meant every change to the renderer had to be made
+# twice or the pictures quietly stopped being of the thing they claimed to show.
 #
 # The orb is drawn with a Canvas and gradients, and there is no honest way to
 # re-emit that as SVG. So this runs keystone/IrisBody.qml under Qt's own `qml`
@@ -20,6 +19,13 @@
 # Every orb is drawn with reduced motion on, which freezes each state at the
 # moment Iris.js marks as the one it reads best at. That is what makes these
 # reproducible: run it twice, get the same file.
+#
+# The third image, preview.png, is deliberately NOT built here. It is the
+# marketplace listing image, and a listing image has to be a photograph of the
+# thing running on a desktop rather than a catalogue of it: one orb at the size
+# a person actually sees, with a real order typed into the real form. It is
+# captured by hand against a plain ground and committed. Reproducing it means
+# staging the desktop again, not running a script — see docs/development.md.
 set -euo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -131,7 +137,7 @@ cell() { # mood shell tint temper caption
 
 join() { local IFS=,; echo "$*"; }
 
-# ------------------------------------------------------------- preview.png
+# ------------------------------------------------------------ docs/moods.png
 #
 # What the plugin actually says with this character: one row of the moods it
 # reports, one row of the palettes it can wear. A reader who sees only this
@@ -154,7 +160,7 @@ tints=(
   "$(cell idle glass bloom    calm bloom)"
   "$(cell idle glass mono     calm mono)"
 )
-render "$here/preview.png" 7 "[$(join "${moods[@]}" "${tints[@]}")]"
+render "$here/docs/moods.png" 7 "[$(join "${moods[@]}" "${tints[@]}")]"
 
 # ------------------------------------------------------- docs/tempers.png
 #
@@ -166,4 +172,4 @@ for t in calm attentive lively dreaming deep shy proud restless; do
 done
 render "$here/docs/tempers.png" 4 "[$(join "${tempers[@]}")]"
 
-echo "wrote preview.png and docs/tempers.png"
+echo "wrote docs/moods.png and docs/tempers.png"

@@ -63,7 +63,7 @@ One generator sits behind it, which does not run at install time and needs
 Qt's `qml` tool:
 
 ```bash
-tools/build-preview       # preview.png and docs/tempers.png
+tools/build-preview       # docs/moods.png and docs/tempers.png
 ```
 
 It draws both sheets by running `keystone/IrisBody.qml` offscreen and grabbing
@@ -81,6 +81,33 @@ asserting the tuning rather than the geometry. What is checkable is checked in
 `tests/iris.test.mjs` — the cosine-squared flank taper, the four layers' phase
 spread, the frame the band has to fit inside, and that every state, shell and
 tint paints without throwing.
+
+### preview.png
+
+The root `preview.png` is the marketplace listing image and is **not** produced
+by that generator. The marketplace scales it to fit a 720px box for the catalog
+card and a 1600px box for the detail view, then draws the card into a fixed
+175px-tall panel with `object-fit: cover`. A card is therefore a centre crop at
+roughly 1.9:1, and a sheet of small labelled cells arrives there as an
+unreadable middle slice of itself. The listing image has to be one orb at the
+size a person actually sees it.
+
+It is staged and captured by hand, because it is a photograph of the running
+plugin rather than a drawing of it:
+
+1. Move to an empty workspace and set a plain dark background. Do not ship a
+   capture of a themed wallpaper: the submission checklist asks the submitter
+   to confirm ownership of the preview assets, and a desktop background is
+   usually somebody else's picture.
+2. `omarchy-shell iris bigger 240`, then `omarchy-shell iris place <x>` to put
+   the orb where the frame wants it.
+3. `omarchy-shell iris ask`, and type a real order into the form without
+   sending it.
+4. `grim` the output, then crop to 1.9:1 with the form and the orb centred and
+   comparable air above and below.
+5. Restore the background, the size, and the draft in the form.
+
+Check the result at card size before committing it, not only at full size.
 
 The three constants that were deliberately re-measured for this frame — the
 frequency, the aberration and the falloff — are commented at the line that
