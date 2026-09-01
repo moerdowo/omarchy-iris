@@ -5,12 +5,12 @@ A pet is a folder with a `pet.json` and one spritesheet. Drop it into
 bar widget's settings. To name it without the panel:
 
 ```bash
-omarchy-shell companion pet <id>
+omarchy-shell iris pet <id>
 ```
 
 which writes `pet` onto this plugin's entry in
 `~/.config/omarchy/shell.json`, where the shell keeps every plugin's
-settings. A pre-4.0 `~/.config/omarchy/companion.json` is read once and
+settings. A pre-4.0 `~/.config/omarchy/iris.json` is read once and
 migrated there, so an older setup keeps working without creating two sources
 of truth.
 

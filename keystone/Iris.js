@@ -1000,6 +1000,29 @@ function layerPoints(frame, spread, out) {
   return pts
 }
 
+/**
+ * A stroke that fades out towards the orb's flanks.
+ *
+ * The original applies its gaussian TWICE and to two different things: once to
+ * the band's amplitude, in `bandAt`, and once to the final colour — `col = cgl *
+ * mix(1.0, emMask * fall, res)` — which is what makes the band dim as it nears
+ * the edge rather than flattening into a bright bar across the equator.
+ *
+ * `bandAt` covers the first. This is the second: a horizontal gradient whose
+ * alpha follows the same curve, used as the stroke's colour. Canvas cannot vary
+ * an alpha along a stroke any other way, and stroking the band in segments to
+ * fake it costs eight times the calls for a worse edge.
+ */
+function fadedStroke(ctx, R, rgb, w, alpha) {
+  var grad = ctx.createLinearGradient(-R, 0, R, 0)
+  for (var i = 0; i <= 8; i++) {
+    var x = -1 + i / 4
+    var fall = Math.exp(-Math.pow(x * w.falloff, 2))
+    grad.addColorStop(i / 8, rgba(rgb, alpha * fall))
+  }
+  return grad
+}
+
 function strokeBand(ctx, pts, color, width, alpha) {
   if (alpha <= 0.002 || width <= 0) return
   ctx.beginPath()
@@ -1164,15 +1187,17 @@ function paint(ctx, frame, palette, paper) {
   for (i = 0; i < LAYERS.length; i++) {
     var col = layerColor(palette[i] || LAYERS[i].rgb, w)
     layerPoints(frame, LAYERS[i].spread, pts)
-    strokeBand(ctx, pts, rgba(col, 0.085 * w.intensity * alpha), core * 9, 1)
-    strokeBand(ctx, pts, rgba(col, 0.16 * w.intensity * alpha), core * 3.5, 1)
-    strokeBand(ctx, pts, rgba(col, 0.34 * w.intensity * alpha), core * 1.2, 1)
+    strokeBand(ctx, pts, fadedStroke(ctx, R, col, w, 0.085 * w.intensity * alpha), core * 9, 1)
+    strokeBand(ctx, pts, fadedStroke(ctx, R, col, w, 0.16 * w.intensity * alpha), core * 3.5, 1)
+    strokeBand(ctx, pts, fadedStroke(ctx, R, col, w, 0.34 * w.intensity * alpha), core * 1.2, 1)
   }
 
   // The white heart. Drawn on the mean of the two centre layers so it sits
   // where the crests actually agree, which is where the original goes white.
   layerPoints(frame, 0, pts)
-  strokeBand(ctx, pts, rgba(layerColor([1, 1, 1], w), 0.34 * w.intensity * alpha), core * 0.9, 1)
+  strokeBand(ctx, pts,
+    fadedStroke(ctx, R, layerColor([1, 1, 1], w), w, 0.34 * w.intensity * alpha),
+    core * 0.9, 1)
 
   ctx.globalCompositeOperation = "source-over"
   ctx.restore()

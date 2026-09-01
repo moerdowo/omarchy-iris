@@ -107,7 +107,11 @@ Item {
     if (e) for (var j in e) if (root.allowedSetting(j)) out[j] = e[j]
     return out
   }
-  readonly property string configFile: root.home + "/.config/omarchy/companion.json"
+  // Omarchief kept its settings in a file before 4.0, and the migration that
+  // reads one still runs. This fork never had such a file — it is named after
+  // this plugin rather than its parent so that installing Iris alongside
+  // Omarchy Companion cannot read, or re-migrate, the other one's settings.
+  readonly property string configFile: root.home + "/.config/omarchy/iris.json"
   readonly property var settingKeys: [
     "activity", "activityChance", "activityRestSec", "agent",
     "edgeGap", "expressionChance", "expressions", "followFocus",
@@ -142,7 +146,7 @@ Item {
 
     // Once a canonical entry carries the marker, the retired file is inert.
     // This matters after a person removes a migrated key: a later restart
-    // must not resurrect the old value from ~/.config/omarchy/companion.json.
+    // must not resurrect the old value from ~/.config/omarchy/iris.json.
     var merged = root.mergeSettings(({}), root.migrationMarked(before) ? ({}) : fileCfg)
     var top = null
     for (var p = 0; p < next.plugins.length; p++) {
@@ -543,7 +547,7 @@ Item {
   // the rest of our state rather than in the user's config, because it is a
   // placement, not a preference.
 
-  readonly property string homeFile: stateHome + "/omarchy/companion/home.json"
+  readonly property string homeFile: stateHome + "/omarchy/iris/home.json"
   property var homes: ({})
   // A drag or travel can beat the asynchronous first read. Keep every new
   // position and the last chosen monitor until the disk state is available,
@@ -1356,7 +1360,7 @@ Item {
   // state, and a stamp file records which accent it was made for, so a
   // shell restart does not redo work that is already done.
 
-  readonly property string themedDir: stateHome + "/omarchy/companion/themed"
+  readonly property string themedDir: stateHome + "/omarchy/iris/themed"
   // One themed sheet per accent, named for it. Redrawing takes a second;
   // switching between themes the creature has already worn should not. The
   // sheet for the old accent stays on disk, so switching back is a stat and
@@ -1965,7 +1969,7 @@ Item {
   property bool welcomed: true
   FileView {
     id: welcomeStore
-    path: root.stateHome + "/omarchy/companion/welcomed"
+    path: root.stateHome + "/omarchy/iris/welcomed"
     atomicWrites: true
     printErrors: false
     onLoaded: root.welcomed = true
@@ -2326,9 +2330,9 @@ Item {
 
   // ------------------------------------------------------------ IPC
   //
-  //   omarchy-shell companion ask | summon | toggle | show | hide | status
-  //   omarchy-shell companion order "open spotify on DP-2"
-  //   omarchy-shell companion travel DP-2
+  //   omarchy-shell iris ask | summon | toggle | show | hide | status
+  //   omarchy-shell iris order "open spotify on DP-2"
+  //   omarchy-shell iris travel DP-2
 
   property bool shown: true
   // Slid mostly off its edge, out of the way. A click brings it back.
@@ -2343,7 +2347,10 @@ Item {
   // The chief's inner state, published as a small JSON file for scripts and
   // diagnostics. It is a read-only mirror; the bar binds to this service
   // directly and never waits for a file round-trip.
-  readonly property string statusDir: stateHome + "/omarchy/companion"
+  // Named for this plugin, not for the family. Omarchy Companion writes the
+  // same set of files under `omarchy/companion`, and two services sharing one
+  // status directory would each publish over the other's state.
+  readonly property string statusDir: stateHome + "/omarchy/iris"
 
   function statusJson() {
     return JSON.stringify({
@@ -2626,7 +2633,11 @@ Item {
   }
 
   IpcHandler {
-    target: "companion"
+    // Not "companion". Omarchy Companion claims that target, and Quickshell
+    // gives a duplicate to whichever service registered first — so a fork that
+    // kept it would silently route every `omarchy-shell` call to whichever of
+    // the two happened to load first.
+    target: "iris"
 
     function ask(): void { root.askOn("") }
     function order(text: string): string { root.shown = true; return root.runOrder(text) }

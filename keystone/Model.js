@@ -475,7 +475,7 @@ function buildGuardedRunner(cwd, argv) {
   var quoted = []
   for (var i = 0; i < argv.length; i++) quoted.push(shellQuote(argv[i]))
   return "cd " + shellQuote(cwd) + " || exit 1; owner=$$; guard=; guard_ready=0;"
-    + " ready=$(mktemp /tmp/companion-guard.XXXXXX) || exit 1;"
+    + " ready=$(mktemp /tmp/iris-guard.XXXXXX) || exit 1;"
     + " wait_ready() { for ((ready_step=0; ready_step<200; ready_step++)); do"
     + " [ -s \"$ready\" ] && return 0;"
     + " [ -n \"$guard\" ] && kill -0 \"$guard\" 2>/dev/null || return 1;"

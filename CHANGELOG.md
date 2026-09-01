@@ -33,6 +33,12 @@ drawn companion's three settings were replaced rather than renamed.
   pondering sweep all still run — they lean the band and bias where its
   energy gathers rather than pointing eyes, which is the same intent in the
   only form this shape can carry.
+- Applied the horizontal gaussian to the band's BRIGHTNESS as well as to its
+  amplitude. The original multiplies its final colour by that falloff, which
+  is what makes the band dim towards the orb's flanks; applying it only to the
+  amplitude flattened it into a bright bar running edge to edge at the
+  equator. Caught by looking at the thing on a real desktop rather than in a
+  test.
 - Overruled the palette for errors only. A person who dresses the orb in Ice
   still needs a failure to look like a failure, so `alert` collapses the band
   towards a fixed alarm red. It is the one place the character's own tint does
@@ -52,6 +58,24 @@ drawn companion's three settings were replaced rather than renamed.
   "does the resting companion change its idle look on its own" pair, and a
   spritesheet pet still answers them with faces; the orb answers them with
   tempers.
+
+### Coexisting with its parent
+
+Installing this beside Omarchy Companion turned up three things a fork
+inherits and must not share. All three are renamed for this plugin:
+
+- The IPC target was `companion`, which its parent also claims. Quickshell
+  hands a duplicate target to whichever service registered first, so every
+  `omarchy-shell` call was being routed to whichever of the two happened to
+  load first — silently, with only a warning in the shell log. It is `iris`
+  now: `omarchy-shell iris ask`, `omarchy-shell iris temper deep`.
+- The state directory was `$XDG_STATE_HOME/omarchy/companion/`, so two
+  services were publishing status, home position, session list and themed
+  sheets over each other. It is `omarchy/iris/` now.
+- The pre-4.0 settings file the migration reads was
+  `~/.config/omarchy/companion.json`. This fork never had one, and reading
+  its parent's would have re-migrated the other plugin's settings into this
+  one. It is `iris.json` now, which is a path that has never existed.
 
 ### Repository
 

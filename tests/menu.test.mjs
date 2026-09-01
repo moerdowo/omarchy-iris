@@ -156,7 +156,7 @@ test("bar and popout are views over the resident service", () => {
 
   const ipcTargets = [...service.matchAll(/\bIpcHandler\s*\{[\s\S]*?\btarget\s*:\s*"([^"]+)"/g)]
     .map((m) => m[1])
-  assert.deepEqual(ipcTargets, ["companion"], "only the service may own Omarchy Iris IPC")
+  assert.deepEqual(ipcTargets, ["iris"], "only the service may own Omarchy Iris IPC")
 })
 
 test("overview keeps only actions that add something", () => {

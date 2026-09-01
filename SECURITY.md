@@ -23,7 +23,7 @@ can affect a later turn.
 Omarchy plugins execute unsandboxed inside the long-lived `omarchy-shell`
 process. Omarchy Iris does not make that boundary narrower.
 
-An explicit bubble submission or `omarchy-shell companion order …` call runs
+An explicit bubble submission or `omarchy-shell iris order …` call runs
 the selected agent headlessly and unattended. Depending on the agent and the
 installed Omarchy version, that mode may approve actions automatically or
 bypass approval and sandbox checks entirely. Sending an order to the Quake

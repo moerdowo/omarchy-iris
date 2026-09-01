@@ -879,7 +879,7 @@ test("the state directory spelling stays stable", () => {
   // reverse-DNS `omarchyiris` are ours. Anything else beginning any of
   // those ways is a typo — and one that reads as correct right up until a path
   // built from it silently misses.
-  const known = new Set(["omarchy", "omarchief", "omarchyiris", "companion", "companions"])
+  const known = new Set(["omarchy", "omarchief", "omarchyiris", "iris", "companion", "companions"])
   for (const name of files) {
     let text
     try { text = readFileSync(root + name, "utf8") } catch { continue }
@@ -891,7 +891,7 @@ test("the state directory spelling stays stable", () => {
   assert.match(performance, /XDG_STATE_HOME/,
     "perform-check must honor the configured state home")
   assert.match(performance,
-    /os\.path\.join\(state_home,\s*"omarchy",\s*"companion",\s*"status\.json"\)/,
+    /os\.path\.join\(state_home,\s*"omarchy",\s*"iris",\s*"status\.json"\)/,
     "perform-check must read the real status file")
 })
 

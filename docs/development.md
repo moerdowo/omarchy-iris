@@ -113,11 +113,11 @@ rescans the manifest, and reloads the affected service and widget. A shell
 restart should not be part of the normal edit loop.
 
 The service writes its public snapshot to
-`$XDG_STATE_HOME/omarchy/companion/status.json` (normally
-`~/.local/state/omarchy/companion/status.json`). For the running version:
+`$XDG_STATE_HOME/omarchy/iris/status.json` (normally
+`~/.local/state/omarchy/iris/status.json`). For the running version:
 
 ```bash
-omarchy-shell companion status
+omarchy-shell iris status
 ```
 
 The status command and the journal are more reliable than assuming the copy

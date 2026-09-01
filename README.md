@@ -160,9 +160,9 @@ being carried lets the band lag and slosh.
 From a terminal:
 
 ```bash
-omarchy-shell companion shell frosted
-omarchy-shell companion tint theme
-omarchy-shell companion temper lively
+omarchy-shell iris shell frosted
+omarchy-shell iris tint theme
+omarchy-shell iris temper lively
 ```
 
 Each lists what it accepts when given something it does not know. A value is
@@ -201,8 +201,8 @@ unchanged. Anything with news to deliver cuts a performance short, and so does
 your hand. To ask for one:
 
 ```bash
-omarchy-shell companion play notice
-omarchy-shell companion play          # whatever it feels like
+omarchy-shell iris play notice
+omarchy-shell iris play          # whatever it feels like
 ```
 
 ## Bring your own companion
@@ -230,25 +230,25 @@ and a themeable hue range. The complete schema is in
 ## Useful commands
 
 ```bash
-omarchy-shell companion ask
-omarchy-shell companion order "open my calendar"
-omarchy-shell companion stop
-omarchy-shell companion summon
-omarchy-shell companion fresh
-omarchy-shell companion travel DP-2
-omarchy-shell companion tuck on
-omarchy-shell companion show
-omarchy-shell companion hide
-omarchy-shell companion status
-omarchy-shell companion shell halo
-omarchy-shell companion color bleu
-omarchy-shell companion temper deep
+omarchy-shell iris ask
+omarchy-shell iris order "open my calendar"
+omarchy-shell iris stop
+omarchy-shell iris summon
+omarchy-shell iris fresh
+omarchy-shell iris travel DP-2
+omarchy-shell iris tuck on
+omarchy-shell iris show
+omarchy-shell iris hide
+omarchy-shell iris status
+omarchy-shell iris shell halo
+omarchy-shell iris tint bleu
+omarchy-shell iris temper deep
 ```
 
 Every mutation validates its value before changing state. The JSON status
 snapshot lives at
-`$XDG_STATE_HOME/omarchy/companion/status.json` (normally
-`~/.local/state/omarchy/companion/status.json`) for read-only integrations.
+`$XDG_STATE_HOME/omarchy/iris/status.json` (normally
+`~/.local/state/omarchy/iris/status.json`) for read-only integrations.
 It is output, not the control plane; the bar talks to the service directly.
 
 ## Remove
@@ -260,8 +260,8 @@ omarchy plugin remove io.github.moerdowo.omarchyiris
 Confirm Omarchy's removal prompt. Omarchy Iris installs no hooks, background unit,
 or command outside its plugin folder. Its optional local history and
 recolored-sheet cache remain in
-`$XDG_STATE_HOME/omarchy/companion/` (normally
-`~/.local/state/omarchy/companion/`) so an accidental reinstall does not erase
+`$XDG_STATE_HOME/omarchy/iris/` (normally
+`~/.local/state/omarchy/iris/`) so an accidental reinstall does not erase
 them. They can be removed separately if that history is no longer wanted.
 
 ## Develop and verify
