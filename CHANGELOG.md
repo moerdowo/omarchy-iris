@@ -1,5 +1,80 @@
 # Changelog
 
+## 3.0.0 — 2026-09-01
+
+Forked from [Omarchy Companion](https://github.com/moerdowo/omarchy-companion)
+v2.1.0 and given a new character. Breaking on both counts: the plugin id
+changed, so this installs alongside its parent rather than over it, and the
+drawn companion's three settings were replaced rather than renamed.
+
+### The orb
+
+- Replaced the drawn creature with **iris**: a glass orb with a band of light
+  running through it, ported from the animated `SiriOrb` component on
+  <https://maia.id/>. Four copies of one sine wave, spread in phase across an
+  RGB spectrum so they separate into colour at the crests, summed additively
+  and read through a sphere that is dark at the crown and pale at the floor.
+- Carried the construction across, not the technique. The original is a
+  four-pass WebGL2 pipeline; this strokes polylines onto a QML Canvas, so it
+  ships no compiled shader and needs no build step — the same trade the
+  previous character made for the same reason.
+- Re-measured three of the original's constants rather than transplanting
+  them. The frequency, the aberration and the falloff are all defined over a
+  different width here; carried over unchanged they strangle the band into a
+  spindle at the centre and split the four layers into separate ribbons. Each
+  is commented at the line that changes it.
+- Removed the face. An orb has none, so the moods speak through the wave
+  instead: a turn opens the spectrum and runs fast, waiting stops the band
+  travelling and breathes it, an error goes red and tight and shudders,
+  finishing blooms past the rim, and being carried lets the band lag and
+  slosh. Every state the companion had still exists; none of them is a
+  progress bar.
+- Kept the gaze machinery by re-aiming it. Pointer tracking, `notice` and the
+  pondering sweep all still run — they lean the band and bias where its
+  energy gathers rather than pointing eyes, which is the same intent in the
+  only form this shape can carry.
+- Overruled the palette for errors only. A person who dresses the orb in Ice
+  still needs a failure to look like a failure, so `alert` collapses the band
+  towards a fixed alarm red. It is the one place the character's own tint does
+  not win, and nothing else borrows it.
+
+### Settings
+
+- Replaced **Shape**, **Colour** and **Resting expression** with **Glass**,
+  **Tint** and **Resting temper**. The config keys changed with them — `shape`,
+  `color` and `expression` became `shell`, `tint` and `temper` — so a config
+  carried over from Omarchy Companion falls back to the defaults for these
+  three. Everything else in it is read unchanged.
+- `omarchy-shell companion shape|color|expression` became
+  `shell|tint|temper`. Each still lists what it accepts when given something
+  it does not know.
+- Kept `expressions` and `expressionChance` as they are. They are the shared
+  "does the resting companion change its idle look on its own" pair, and a
+  spritesheet pet still answers them with faces; the orb answers them with
+  tempers.
+
+### Repository
+
+- Renamed to Omarchy Iris throughout, including the plugin id
+  (`io.github.moerdowo.omarchyiris`) and the config directory
+  (`~/.config/omarchy-iris`).
+- Removed `keystone/Bloub.js`, `keystone/BloubFit.js`,
+  `keystone/BloubBody.qml`, `pets/bloub/`, `tools/build-eyefit` and
+  `tools/verify-bloub-port`. The port verifier has no successor and the reason
+  is recorded in `docs/development.md`: the previous character was a port of a
+  JavaScript library and could be diffed against it; a shader ported onto a 2D
+  canvas has no shared output to compare.
+- Rewrote `tools/build-preview` to draw its sheets by running
+  `keystone/IrisBody.qml` offscreen under Qt's `qml` tool. It used to re-emit
+  the character as SVG from the engine's frames, which meant every renderer
+  change had to be made twice or the pictures stopped being of the thing they
+  claimed to show.
+- Replaced `docs/expressions.png` with `docs/tempers.png`.
+- Fixed a latent sizing bug inherited from the previous body: rebuilding the
+  engine on a size change read the radius from a binding that is not
+  guaranteed to have updated yet, so the orb could keep whatever size it was
+  first built at. It derives the radius directly now.
+
 ## 2.1.0 — 2026-09-01
 
 - Made the bar icon the creature. It was a Nerd Font robot glyph; it is now
@@ -31,8 +106,8 @@ Renamed, and reduced to one companion. Both are breaking: the plugin id
 changed, so this installs beside the old one rather than updating it, and the
 bundled spritesheet pets are gone.
 
-- Renamed to **Omarchy Companion**: id `io.github.moerdowo.omarchycompanion`,
-  `omarchy-shell companion ...`, user pets in `~/.config/omarchy-companion/`,
+- Renamed to **Omarchy Iris**: id `io.github.moerdowo.omarchyiris`,
+  `omarchy-shell companion ...`, user pets in `~/.config/omarchy-iris/`,
   state in `$XDG_STATE_HOME/omarchy/companion/`. Nothing carries over from the
   previous id; settings are re-entered once.
 - Removed the bundled Gritty, Gritty head-on and Quattro artwork. The
@@ -113,7 +188,7 @@ bundled spritesheet pets are gone.
 
 ## 1.0.0 — 2026-09-01
 
-Omarchy Companion forks [Omarchief](https://github.com/daventhedude/omarchief) 4.0.0
+Omarchy Iris forks [Omarchief](https://github.com/daventhedude/omarchief) 4.0.0
 and replaces its character. Everything about the desktop is Omarchief's; the
 entries below are what this fork changed. It carries its own plugin id, so it
 installs beside Omarchief rather than over it, and shares none of its settings
@@ -152,8 +227,8 @@ or state.
 - Added `tools/build-preview`, which redraws `preview.png` and
   `docs/expressions.png` from the shipped renderer, so the pictures in the
   documentation cannot drift from the character.
-- Renamed everything the plugin owns: id `io.github.moerdowo.omarchycompanion`,
-  command `omarchy-shell companion ...`, user pets in `~/.config/omarchy-companion/`,
+- Renamed everything the plugin owns: id `io.github.moerdowo.omarchyiris`,
+  command `omarchy-shell companion ...`, user pets in `~/.config/omarchy-iris/`,
   state in `$XDG_STATE_HOME/omarchy/companion/`. OmaPets-compatible discovery
   and status reading are unchanged.
 - Kept the three spritesheet companions, the atlas and face builders, and the

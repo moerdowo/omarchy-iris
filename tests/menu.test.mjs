@@ -156,13 +156,13 @@ test("bar and popout are views over the resident service", () => {
 
   const ipcTargets = [...service.matchAll(/\bIpcHandler\s*\{[\s\S]*?\btarget\s*:\s*"([^"]+)"/g)]
     .map((m) => m[1])
-  assert.deepEqual(ipcTargets, ["companion"], "only the service may own Omarchy Companion IPC")
+  assert.deepEqual(ipcTargets, ["companion"], "only the service may own Omarchy Iris IPC")
 })
 
 test("overview keeps only actions that add something", () => {
   assert.doesNotMatch(panel, /text:\s*"Home"/,
     "returning to a saved position is not a meaningful overview button")
-  assert.doesNotMatch(panel, /Ask Omarchy Companion/,
+  assert.doesNotMatch(panel, /Ask Omarchy Iris/,
     "the companion itself is already the ask affordance")
   assert.match(panel, /showPrimaryAction:\s*!ready\s*\|\|\s*!hasAgent\s*\|\|\s*working/,
     "agent setup and stopping a turn must remain reachable")
@@ -235,15 +235,15 @@ test("every setting exposed by the popout is accepted by the service", () => {
 test("removed invasive and obsolete features stay removed", () => {
   const runtime = `${service}\n${widget}\n${panel}`
   assert.doesNotMatch(runtime, /companion-hooks?|hooksInstalled|hookSet/,
-    "Omarchy Companion must not install or manage another agent's hooks")
+    "Omarchy Iris must not install or manage another agent's hooks")
   assert.doesNotMatch(runtime, /cfgConsoleAt|consoleAt\s*\(/,
     "the non-native near-creature console mode must not return")
   assert.doesNotMatch(runtime, /shouldRetryTalk|talkRetry|talkRetried/,
     "an agent turn must never be retried implicitly")
   assert.doesNotMatch(runtime, /timerSeconds|timerEndsAt|cfgReadout|timerWords|timerCompact/,
     "the removed clock/timer product must not return")
-  assert.match(service, /if\s*\(p\s*!==\s*"bloub"\)\s*out\.push\(pluginDir\s*\+\s*"\/pets\/bloub"\)/,
-    "a missing configured pet must end at the bundled Bloub fallback")
+  assert.match(service, /if\s*\(p\s*!==\s*"iris"\)\s*out\.push\(pluginDir\s*\+\s*"\/pets\/iris"\)/,
+    "a missing configured pet must end at the bundled Iris fallback")
 })
 
 test("agent work is guarded across Stop, reload, and plugin removal", () => {
@@ -590,12 +590,12 @@ test("bundled pets are safe, complete, and uniquely identified", () => {
     // asking after something that does not exist. What it must still satisfy
     // is that the renderer is one this plugin actually has.
     if (spec.render !== undefined) {
-      assert.equal(spec.render, "bloub", `${id} names an unknown renderer`)
+      assert.equal(spec.render, "iris", `${id} names an unknown renderer`)
       assert.equal(spec.spritesheetPath, undefined, `${id} is drawn but names a sheet`)
       assert.match(read("keystone/Service.qml"),
-        /String\(pet\.render \|\| ""\) === "bloub"/,
+        /String\(pet\.render \|\| ""\) === "iris"/,
         "the service must recognise the renderer the drawn pet names")
-      assert.ok(existsSync(join(root, "keystone/Bloub.js")), "the drawn pet has no renderer")
+      assert.ok(existsSync(join(root, "keystone/Iris.js")), "the drawn pet has no renderer")
       continue
     }
 
@@ -628,8 +628,8 @@ test("bundled pets are safe, complete, and uniquely identified", () => {
   // still here for anybody who brings their own — tools/coldstart-check plants
   // a pet in an isolated HOME and proves that path — but no artwork is carried
   // in the payload any more.
-  assert.deepEqual([...ids].sort(), ["bloub"])
-  assert.match(service, /priority = \{'bloub': 0\}/,
+  assert.deepEqual([...ids].sort(), ["iris"])
+  assert.match(service, /priority = \{'iris': 0\}/,
     "the picker must keep the bundled companion ahead of arbitrary local ids")
 })
 
@@ -886,14 +886,14 @@ test("cold-start harness isolates user configuration and asserts bundled art", (
   // and a check that only proved that would leave the whole spritesheet path —
   // discovery, the sheet, the grid — untested by the one test that runs a real
   // shell.
-  assert.match(source, /pets\/bloub/)
-  assert.match(source, /drawn pet: bloub source: bundled/)
+  assert.match(source, /pets\/iris/)
+  assert.match(source, /drawn pet: iris source: bundled/)
   // No spritesheet ships, so the check plants one where a person's own pets go
   // and proves the loader and the discovery path with it.
-  assert.match(source, /omarchy-companion\/pets\/probe/)
+  assert.match(source, /omarchy-iris\/pets\/probe/)
   assert.match(source, /sprite pet: probe source: planted/)
   assert.match(source, /legacy duplicates -> one bar entry/)
   assert.match(source, /retired file remains sealed on restart/)
-  assert.match(source, /missing custom pet -> bundled bloub/)
+  assert.match(source, /missing custom pet -> bundled iris/)
   assert.match(source, /extreme config -> safe defaults/)
 })

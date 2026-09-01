@@ -74,7 +74,7 @@ JSON
 # exercises the path somebody else's pet actually arrives by, and it cannot be
 # satisfied by whatever the developer happens to have installed, because it
 # lives in this test's own empty HOME.
-probe_dir=$test_config/omarchy-companion/pets/probe
+probe_dir=$test_config/omarchy-iris/pets/probe
 mkdir -p "$probe_dir"
 magick -size 64x64 xc:'#9ece6a' "$probe_dir/probe.png"
 cat > "$probe_dir/pet.json" <<'JSON'
@@ -226,7 +226,7 @@ ShellRoot {
       var service = serviceLoader.item
       if (!service || !widgetLoader.item) return
       if (!("spriteOk" in service) || !("spritePetId" in service)
-          || !("bloubPet" in service)) {
+          || !("irisPet" in service)) {
         root.fail("service does not expose pet readiness")
         return
       }
@@ -235,19 +235,19 @@ ShellRoot {
         // what a spritesheet pet means by it: no sheet was loaded and none
         // should have been. The sheet path is proved at phase 21, once the
         // migration below has asked for the planted pet.
-        if (!service.bloubPet || service.spritePetId !== "bloub") return
+        if (!service.irisPet || service.spritePetId !== "iris") return
         if (service.spriteOk) {
           root.fail("the drawn companion loaded a spritesheet")
           return
         }
-        if (String(service.spritePetDir || "").indexOf("$install_dir/pets/bloub") !== 0) {
-          root.fail("Bloub came from outside the isolated plugin: " + service.spritePetDir)
+        if (String(service.spritePetDir || "").indexOf("$install_dir/pets/iris") !== 0) {
+          root.fail("Iris came from outside the isolated plugin: " + service.spritePetDir)
           return
         }
-        if (service.cfgShape !== "cercle" || service.cfgColor !== "blanc"
-            || service.cfgExpression !== "neutre") {
-          root.fail("a fresh install is not a white circle at rest: "
-            + service.cfgShape + "/" + service.cfgColor + "/" + service.cfgExpression)
+        if (service.cfgShell !== "glass" || service.cfgTint !== "spectrum"
+            || service.cfgTemper !== "calm") {
+          root.fail("a fresh install is not a calm spectrum orb behind glass: "
+            + service.cfgShell + "/" + service.cfgTint + "/" + service.cfgTemper)
           return
         }
         // A drawn companion never walks, so the settings that would walk it
@@ -261,9 +261,9 @@ ShellRoot {
           petIds.push(String(service.installedPets[p].id || ""))
         // The bundled drawn one, and the planted one found under the
         // isolated HOME — discovery of a user's own pet, in one assertion.
-        if (petIds.join(",") !== "bloub,probe") return
+        if (petIds.join(",") !== "iris,probe") return
         if (service.petSize !== 48) {
-          root.fail("fresh Bloub did not use its recommended size: " + service.petSize)
+          root.fail("fresh Iris did not use its recommended size: " + service.petSize)
           return
         }
         if (service.worldMonitor === "" || !service.activeChief) return
@@ -282,9 +282,9 @@ ShellRoot {
             + ", width=" + service.worldWidth + ")")
           return
         }
-        console.log("COLDSTART body: drawn pet: bloub source: bundled")
-        console.log("COLDSTART picker: bloub + probe")
-        console.log("COLDSTART defaults: Bloub + white circle + neutral + 48")
+        console.log("COLDSTART body: drawn pet: iris source: bundled")
+        console.log("COLDSTART picker: iris + probe")
+        console.log("COLDSTART defaults: Iris + glass + spectrum + calm + 48")
         console.log("COLDSTART placement: active screen + bottom-right home")
         // Exercise the real 3.x migration after proving a clean install. Old
         // setup instructions could leave settings in a file, more than one
@@ -354,7 +354,7 @@ ShellRoot {
         // the artwork machinery untested.
         if (!service.spriteOk || service.spritePetId !== "probe"
             || bundledSprite.status !== Image.Ready) return
-        if (service.bloubPet) {
+        if (service.irisPet) {
           root.fail("a spritesheet pet still claims to be drawn")
           return
         }
@@ -374,8 +374,8 @@ ShellRoot {
         if (service.cfgPet !== "pet-that-is-not-installed") return
         // The last candidate in the walk is the bundled default, so a body that
         // cannot be found ends on the drawn one rather than on an empty stage.
-        if (!service.bloubPet || service.spritePetId !== "bloub") return
-        console.log("COLDSTART fallback: missing custom pet -> bundled bloub")
+        if (!service.irisPet || service.spritePetId !== "iris") return
+        console.log("COLDSTART fallback: missing custom pet -> bundled iris")
         var bounded = JSON.parse(JSON.stringify(root.isolatedConfig))
         var entry = bounded.bar.layout.left[0]
         entry.pet = "probe"
@@ -540,11 +540,11 @@ fi
 
 printf '%s\n' "$out" | grep -q 'COLDSTART body: sprite pet: probe source: planted' \
   || { echo "coldstart-check: the planted spritesheet pet never became ready" >&2; exit 1; }
-printf '%s\n' "$out" | grep -q 'COLDSTART body: drawn pet: bloub source: bundled' \
+printf '%s\n' "$out" | grep -q 'COLDSTART body: drawn pet: iris source: bundled' \
   || { echo "coldstart-check: the drawn companion never became ready" >&2; exit 1; }
-printf '%s\n' "$out" | grep -q 'COLDSTART picker: bloub + probe' \
+printf '%s\n' "$out" | grep -q 'COLDSTART picker: iris + probe' \
   || { echo "coldstart-check: bundled pets never reached the picker" >&2; exit 1; }
-printf '%s\n' "$out" | grep -q 'COLDSTART defaults: Bloub + white circle + neutral + 48' \
+printf '%s\n' "$out" | grep -q 'COLDSTART defaults: Iris + glass + spectrum + calm + 48' \
   || { echo "coldstart-check: fresh companion defaults changed" >&2; exit 1; }
 printf '%s\n' "$out" | grep -q 'COLDSTART migration: legacy duplicates -> one bar entry' \
   || { echo "coldstart-check: legacy settings did not migrate cleanly" >&2; exit 1; }
@@ -554,7 +554,7 @@ printf '%s\n' "$out" | grep -q 'COLDSTART migration: top-only -> right bar entry
   || { echo "coldstart-check: top-level-only install did not gain its bar widget" >&2; exit 1; }
 printf '%s\n' "$out" | grep -q 'COLDSTART architecture: service + bar-widget' \
   || { echo "coldstart-check: service/widget pair never became ready" >&2; exit 1; }
-printf '%s\n' "$out" | grep -q 'COLDSTART fallback: missing custom pet -> bundled bloub' \
+printf '%s\n' "$out" | grep -q 'COLDSTART fallback: missing custom pet -> bundled iris' \
   || { echo "coldstart-check: missing pet did not fall back to the bundled default" >&2; exit 1; }
 printf '%s\n' "$out" | grep -q 'COLDSTART bounds: extreme config -> safe defaults' \
   || { echo "coldstart-check: persisted numeric settings escaped their bounds" >&2; exit 1; }

@@ -876,10 +876,10 @@ test("the state directory spelling stays stable", () => {
   // Three families of name live in this repository and all three get mistyped
   // the same way. `omarchy` is the desktop; `omarchief` is the project this was
   // forked from, which the documentation cites by name; `companion` and the
-  // reverse-DNS `omarchycompanion` are ours. Anything else beginning any of
+  // reverse-DNS `omarchyiris` are ours. Anything else beginning any of
   // those ways is a typo — and one that reads as correct right up until a path
   // built from it silently misses.
-  const known = new Set(["omarchy", "omarchief", "omarchycompanion", "companion", "companions"])
+  const known = new Set(["omarchy", "omarchief", "omarchyiris", "companion", "companions"])
   for (const name of files) {
     let text
     try { text = readFileSync(root + name, "utf8") } catch { continue }

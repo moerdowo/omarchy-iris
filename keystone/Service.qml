@@ -5,9 +5,9 @@ import Quickshell.Wayland
 import Quickshell.Hyprland
 import qs.Commons
 import "Model.js" as Model
-import "Bloub.js" as Bloub
+import "Iris.js" as Iris
 
-// Omarchy Companion — your desktop's chief of staff.
+// Omarchy Iris — your desktop's chief of staff.
 //
 // Resident service and stage. One click-through strip per monitor makes the
 // whole arrangement a single walkable world: the chief lives on exactly one
@@ -58,7 +58,7 @@ Item {
   // source of truth.
   property var shell: null
   readonly property string entryId: manifest && manifest.id ? String(manifest.id)
-                                                            : "io.github.moerdowo.omarchycompanion"
+                                                            : "io.github.moerdowo.omarchyiris"
   readonly property var entrySettings: {
     if (!shell || !shell.shellConfig) return null
     var c = shell.shellConfig
@@ -109,11 +109,12 @@ Item {
   }
   readonly property string configFile: root.home + "/.config/omarchy/companion.json"
   readonly property var settingKeys: [
-    "activity", "activityChance", "activityRestSec", "agent", "color",
-    "edgeGap", "expression", "expressionChance", "expressions", "followFocus",
+    "activity", "activityChance", "activityRestSec", "agent",
+    "edgeGap", "expressionChance", "expressions", "followFocus",
     "frameIntervalMs", "hideOnFullscreen", "patienceSec", "pet",
     "promptPreamble", "reduceMotion", "roam", "screen", "sessionIdleMin",
-    "shape", "size", "speakMax", "talk", "theme", "themeTint",
+    "shell", "size", "speakMax", "talk", "temper", "theme", "themeTint",
+    "tint",
     "turnTimeoutSec", "workdir"
   ]
 
@@ -231,13 +232,13 @@ Item {
     "    seen.add(ident)\n" +
     "    name = ' '.join(str(data.get('displayName') or data.get('name') or ident).split())[:48] or ident\n" +
     "    out.append({'id': ident, 'name': name, 'dir': os.path.join(base, ident)})\n" +
-    "priority = {'bloub': 0}\n" +
+    "priority = {'iris': 0}\n" +
     "out.sort(key=lambda pet: (priority.get(pet['id'], 4), pet['name'].casefold(), pet['id'].casefold()))\n" +
     "print(json.dumps(out, ensure_ascii=False))\n"
   Process {
     id: petScan
     command: ["python3", "-c", root.petScanScript,
-      root.home + "/.config/omarchy-companion/pets",
+      root.home + "/.config/omarchy-iris/pets",
       root.home + "/.config/omapets/pets",
       root.pluginDir + "/pets"]
     stdout: StdioCollector {
@@ -279,7 +280,9 @@ Item {
   // hue window keeps its own colours regardless; this is for the ones that
   // could be repainted and whose owner would rather they were not.
   readonly property bool cfgTheme: Model.boolValue(cfg.theme, true)
-  // Whether a resting creature changes its expression on its own.
+  // Whether a resting companion changes its idle look on its own: a sprite
+  // pet's face, the drawn orb's temper. One setting, because it is one
+  // question about the desktop rather than one about a body.
   readonly property bool cfgExpressions: Model.boolValue(cfg.expressions, true)
   readonly property real cfgGlanceChance: {
     var v = Number(cfg.expressionChance)
@@ -305,13 +308,13 @@ Item {
   // A fresh install wears the pet it ships with. Invalid or missing ids fall
   // back to it too, so a broken preference never leaves an empty stage.
   readonly property string cfgPet: typeof cfg.pet === "string" && Model.safeId(cfg.pet)
-    ? cfg.pet : "bloub"
+    ? cfg.pet : "iris"
   // What a drawn companion is wearing. Each falls back to its own default
   // rather than to nothing, because these come out of shell.json and a value
   // somebody typed by hand must never leave the stage empty.
-  readonly property string cfgShape: Bloub.shapeId(cfg.shape)
-  readonly property string cfgColor: Bloub.colorId(cfg.color)
-  readonly property string cfgExpression: Bloub.expressionId(cfg.expression)
+  readonly property string cfgShell: Iris.shellId(cfg.shell)
+  readonly property string cfgTint: Iris.tintId(cfg.tint)
+  readonly property string cfgTemper: Iris.temperId(cfg.temper)
   // A creature that stays where you put it is a companion; one that paces
   // the screen is a screensaver. Roaming is opt-in.
   // How often the creature finds something to do, and how long it rests
@@ -347,7 +350,7 @@ Item {
   }
 
   // Keep the resident contract concise; runtime facts ride on every turn.
-  readonly property string defaultPreamble: "You are Omarchy Companion, the resident chief of staff of this Omarchy Linux desktop. Carry out the user's order unattended. Prefer the desktop's supported `omarchy`, `omarchy-shell`, and Hyprland controls so its state stays coherent and actions remain undoable. Never install software or make an irreversible change unless the order expressly asks for it. If ambiguity could materially change the result, ask one short question.\n\nYour reply appears in a compact speech bubble: answer in the user's language, plain text, no markdown, in at most two short sentences. Do the work before reporting it. When a result needs to be seen, open it in the user's configured browser, editor, file manager, or terminal instead of printing it.\n\nYour standing notes are at " + root.notesPath + ". Read them only when prior context matters and append only durable preferences or facts."
+  readonly property string defaultPreamble: "You are Omarchy Iris, the resident chief of staff of this Omarchy Linux desktop. Carry out the user's order unattended. Prefer the desktop's supported `omarchy`, `omarchy-shell`, and Hyprland controls so its state stays coherent and actions remain undoable. Never install software or make an irreversible change unless the order expressly asks for it. If ambiguity could materially change the result, ask one short question.\n\nYour reply appears in a compact speech bubble: answer in the user's language, plain text, no markdown, in at most two short sentences. Do the work before reporting it. When a result needs to be seen, open it in the user's configured browser, editor, file manager, or terminal instead of printing it.\n\nYour standing notes are at " + root.notesPath + ". Read them only when prior context matters and append only durable preferences or facts."
   readonly property int preambleMax: 8000
   readonly property int orderMax: 8000
   readonly property string preamble:
@@ -1032,7 +1035,7 @@ Item {
   readonly property int consoleWindows: consoleWindowKeys.length
   // The scratchpad is shared by Omarchy. It is our console only when an
   // Omarchy agent window is actually in it; a visible music player or other
-  // scratchpad resident must never be toggled by Omarchy Companion's console button.
+  // scratchpad resident must never be toggled by Omarchy Iris's console button.
   readonly property bool consoleOpen: consoleWorkspaceOpen && consoleWindows > 0
   onConsoleWindowKeysChanged: root.probeConsoleLaunch()
   readonly property var fullscreenMonitors: {
@@ -1102,7 +1105,7 @@ Item {
   })
   onMoodChanged: statusWrite.restart()
   onEnergyChanged: statusWrite.restart()
-  onBloubPetChanged: statusWrite.restart()
+  onIrisPetChanged: statusWrite.restart()
   onConsoleOpenChanged: {
     if (consoleOpen && activeChief) activeChief.cheer()
     statusWrite.restart()
@@ -1121,10 +1124,10 @@ Item {
     if (pluginDir === "") return []
     var p = cfgPet
     if (p === "") return []
-    var out = [home + "/.config/omarchy-companion/pets/" + p,
+    var out = [home + "/.config/omarchy-iris/pets/" + p,
                home + "/.config/omapets/pets/" + p,
                pluginDir + "/pets/" + p]
-    if (p !== "bloub") out.push(pluginDir + "/pets/bloub")
+    if (p !== "iris") out.push(pluginDir + "/pets/iris")
     return out
   }
   property int petDirIndex: 0
@@ -1167,8 +1170,8 @@ Item {
   property var spriteBlink: null
   property var spriteContent: null
   // A companion with no artwork at all: the body is computed every frame from
-  // Bloub.js, so none of the sheet machinery above applies to it.
-  property bool bloubPet: false
+  // Iris.js, so none of the sheet machinery above applies to it.
+  property bool irisPet: false
   // Align the visible drawing, not its transparent atlas cell, with the
   // screen edge. Qt shares this decode with the on-screen Image.
   Image {
@@ -1183,7 +1186,7 @@ Item {
     spriteRows, spriteColumns)
   // Neither a still sprite pet nor the drawn one walks: following the focus
   // and roaming are the creature moving on its own, and neither has legs.
-  readonly property bool stillPet: spriteFaces !== null || bloubPet
+  readonly property bool stillPet: spriteFaces !== null || irisPet
   property int spritePreferredSize: 0
   property bool spritePixelArt: false
   property string spritePetId: ""
@@ -1231,7 +1234,7 @@ Item {
     root.spriteIdleFaces = null
     root.spriteBlink = null
     root.spriteContent = null
-    root.bloubPet = false
+    root.irisPet = false
     root.spritePreferredSize = 0
     root.spritePixelArt = false
     root.themedRevision = 0
@@ -1286,9 +1289,9 @@ Item {
         var dir = root.petDirCandidates[root.petDirIndex]
         // A pet may be DRAWN rather than blitted. It ships no spritesheet, so
         // none of the atlas reading below means anything for it: the character
-        // is code, and its shape, colour and expression are settings. Only the
+        // is code, and its glass, tint and temper are settings. Only the
         // two fields that are about placing a body on a desktop are read.
-        if (String(pet.render || "") === "bloub") {
+        if (String(pet.render || "") === "iris") {
           root.spritePetId = dir.slice(dir.lastIndexOf("/") + 1)
           root.spritePetDir = dir
           root.spriteContent = pet.content && typeof pet.content === "object" ? pet.content : null
@@ -1297,8 +1300,8 @@ Item {
           // Its performances are code, not rows, so they come from the
           // renderer rather than from the manifest — but they are the same
           // tracks, so everything that schedules an activity keeps working.
-          root.spriteActivities = Bloub.performanceTracks()
-          root.bloubPet = true
+          root.spriteActivities = Iris.performanceTracks()
+          root.irisPet = true
           root.petResolved = true
           return
         }
@@ -2360,10 +2363,10 @@ Item {
       consoleOpen: consoleOpen,
       sessionActive: sessionId !== "",
       pet: spritePetId !== "" ? spritePetId : cfgPet,
-      shape: bloubPet ? cfgShape : "",
-      color: bloubPet ? cfgColor : "",
-      expression: bloubPet ? cfgExpression : "",
-      bodyReady: spriteOk || bloubPet,
+      shell: irisPet ? cfgShell : "",
+      tint: irisPet ? cfgTint : "",
+      temper: irisPet ? cfgTemper : "",
+      bodyReady: spriteOk || irisPet,
       themed: themedUsable,
       activity: activeChief && activeChief.activity
         ? String(activeChief.activity.name || "").slice(0, 64) : "",
@@ -2444,14 +2447,14 @@ Item {
   // stage — it is a preference about a body, not about the desktop — so it is
   // accepted then, with a word about when it will show.
   function wearChoice(name, value) {
-    var list = name === "shape" ? Bloub.SHAPES
-      : name === "color" ? Bloub.COLORS : Bloub.EXPRESSIONS
-    var current = name === "shape" ? root.cfgShape
-      : name === "color" ? root.cfgColor : root.cfgExpression
+    var list = name === "shell" ? Iris.SHELLS
+      : name === "tint" ? Iris.TINTS : Iris.TEMPERS
+    var current = name === "shell" ? root.cfgShell
+      : name === "tint" ? root.cfgTint : root.cfgTemper
     var want = String(value || "")
     if (want === "") return current
-    if (!root.setConfig(name, want)) return root.settingError + ": " + Bloub.idsOf(list)
-    return root.bloubPet ? "wearing " + want
+    if (!root.setConfig(name, want)) return root.settingError + ": " + Iris.idsOf(list)
+    return root.irisPet ? "wearing " + want
       : want + ", for when the drawn companion is worn"
   }
 
@@ -2479,10 +2482,10 @@ Item {
       return foundPet ? { ok: true, value: pet }
         : { ok: false, error: "pet is not installed" }
     }
-    if (name === "shape" || name === "color" || name === "expression") {
+    if (name === "shell" || name === "tint" || name === "temper") {
       var choice = String(value || "")
-      var known = name === "shape" ? Bloub.isShapeId(choice)
-        : name === "color" ? Bloub.isColorId(choice) : Bloub.isExpressionId(choice)
+      var known = name === "shell" ? Iris.isShellId(choice)
+        : name === "tint" ? Iris.isTintId(choice) : Iris.isTemperId(choice)
       return known ? { ok: true, value: choice }
         : { ok: false, error: "no such " + name }
     }
@@ -2678,9 +2681,9 @@ Item {
     // The drawn companion's three choices. Reached by name from memory more
     // often than from the panel, so a value that is not recognised answers
     // with the ones that are rather than with a bare refusal.
-    function shape(id: string): string { return root.wearChoice("shape", id) }
-    function color(id: string): string { return root.wearChoice("color", id) }
-    function expression(id: string): string { return root.wearChoice("expression", id) }
+    function shell(id: string): string { return root.wearChoice("shell", id) }
+    function tint(id: string): string { return root.wearChoice("tint", id) }
+    function temper(id: string): string { return root.wearChoice("temper", id) }
 
     function speak(on: string): string {
       var want = Model.flagValue(on, root.cfgTalk)
@@ -2786,7 +2789,7 @@ Item {
       return root.mood
         + " energy=" + Math.round(root.energy * 100) + "%"
         + " agent=" + (root.agentId === "" ? "none" : root.agentId)
-        + " body=" + (root.spriteOk || root.bloubPet ? root.spritePetId : "fallback")
+        + " body=" + (root.spriteOk || root.irisPet ? root.spritePetId : "fallback")
         + " monitor=" + root.worldMonitor
         + " console=" + (root.consoleLaunchPending ? "opening"
           : root.consoleOpen ? "open" : "closed")
@@ -2827,7 +2830,7 @@ Item {
       exclusionMode: ExclusionMode.Normal
       exclusiveZone: 0
       mask: chiefLoader.item ? chiefLoader.item.inputRegion : null
-      WlrLayershell.namespace: "omarchy-companion"
+      WlrLayershell.namespace: "omarchy-iris"
 
       // Prime with Exclusive on every open, then settle on OnDemand — the
       // KeyboardPanel recipe. Hyprland focuses OnDemand when a surface
@@ -2871,10 +2874,10 @@ Item {
           petSize: root.petSize
           fullScreenHeight: modelData.height
           pixelArt: root.spritePixelArt
-          bloub: root.bloubPet
-          bloubShape: root.cfgShape
-          bloubColor: root.cfgColor
-          bloubExpression: root.cfgExpression
+          iris: root.irisPet
+          irisShell: root.cfgShell
+          irisTint: root.cfgTint
+          irisTemper: root.cfgTemper
           mood: root.mood
           energy: root.energy
           activityRate: root.cfgActivity

@@ -1,0 +1,8 @@
+{
+  "id": "iris",
+  "displayName": "Iris",
+  "author": "moerdowo",
+  "description": "A glass orb with a band of light running through it. Four phase-spread sine waves, summed additively and read through a sphere that is dark at the crown and pale at the floor. Drawn every frame rather than blitted, so its glass, its tint and its resting temper are settings.",
+  "render": "iris",
+  "size": 48
+}

@@ -1,4 +1,4 @@
-// Omarchy Companion's pure logic: no QML, no Quickshell, testable with plain node
+// Omarchy Iris's pure logic: no QML, no Quickshell, testable with plain node
 // (`node --test tests/`).
 //
 // The chief's whole inner life reduces to a handful of read-only inputs —
@@ -109,7 +109,7 @@ function decideAction(rand, mood, activity) {
 // ------------------------------------------------------------ sprite atlas
 //
 // The Codex/Petdex pet atlas: 8 columns of 192x208 frames, 9 rows (v1) or
-// 11 (v2). Row semantics are fixed across the ecosystem; Omarchy Companion uses the
+// 11 (v2). Row semantics are fixed across the ecosystem; Omarchy Iris uses the
 // directional walk rows for actual walking, which bar pets never get to do.
 var ATLAS = {
   columns: 8,
@@ -557,7 +557,7 @@ function buildConsoleCommand(agent, prompt) {
   return argv
 }
 
-// An explicit override is honest only when Omarchy Companion knows how to launch it.
+// An explicit override is honest only when Omarchy Iris knows how to launch it.
 // The desktop default does not need this gate: Omarchy remains its launcher.
 function canOpenConsole(agent) {
   return buildConsoleCommand(String(agent || ""), "") !== null

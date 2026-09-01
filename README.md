@@ -1,21 +1,22 @@
-# Omarchy Companion
+# Omarchy Iris
 
 Your desktop's chief of staff — a small companion that can act on an order,
 carry an agent conversation, and stay one click away in the Omarchy bar.
 
-Its default body is **bloub**: one filled shape that morphs between states,
-with two capsule eyes cut out of it. It is drawn every frame rather than
-blitted from a spritesheet, so its shape, its colour and its resting
-expression are settings — and changing one of them morphs on screen instead of
-cutting, which no sheet of drawings can do.
+Its default body is **iris**: a glass orb with a band of light running through
+it. It is drawn every frame rather than blitted from a spritesheet, so its
+glass, its tint and its resting temper are settings — and changing one of them
+morphs on screen instead of cutting, which no sheet of drawings can do.
 
-![The companion in each of its moods, and the eight shapes it can wear](preview.png)
+![The orb in each of its moods, and the seven palettes it can wear](preview.png)
 
-Omarchy Companion is a fork of [Omarchief](https://github.com/daventhedude/omarchief)
-with its character replaced. Everything about the desktop — the service, the
-bar widget, the agent turns, the placement — is Omarchief's; what is new is a
-companion that is code rather than artwork. It is built around Omarchy 4's
-native plugin architecture: one resident service owns the creature and its
+Omarchy Iris is a fork of
+[Omarchy Companion](https://github.com/moerdowo/omarchy-companion) with its
+character replaced, and Omarchy Companion is itself a fork of
+[Omarchief](https://github.com/daventhedude/omarchief). Everything about the
+desktop — the service, the bar widget, the agent turns, the placement — comes
+down that line; what is new here is the orb. It is built around Omarchy 4's
+native plugin architecture: one resident service owns the companion and its
 state, while every bar gets a thin view onto that same service. There is one
 agent turn, one conversation, and one place in the world no matter how many
 monitors you use.
@@ -23,7 +24,7 @@ monitors you use.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/moerdowo/omarchy-companion.git --enable
+omarchy plugin add https://github.com/moerdowo/omarchy-iris.git --enable
 ```
 
 That is the entire setup. Review Omarchy's unsandboxed-plugin warning, confirm
@@ -31,14 +32,14 @@ the install, and keep the declared **right** placement or choose another bar
 section. Omarchy then starts the service and adds the one canonical widget
 entry. Do not add a second entry to `shell.json`.
 
-Omarchy Companion has its own plugin id, so it installs and runs beside Omarchief
+Omarchy Iris has its own plugin id, so it installs and runs beside Omarchief
 rather than replacing it. It reads none of Omarchief's settings and writes
 none of its state.
 
 ## Requirements
 
 - **Runtime:** Omarchy 4, including its Quickshell/Hyprland integration,
-  `bash`, `python3`, `jq`, and the regular `omarchy-*` helpers. Omarchy Companion installs no
+  `bash`, `python3`, `jq`, and the regular `omarchy-*` helpers. Omarchy Iris installs no
   system package, daemon, hook, or background unit of its own.
 - **Orders:** an agent CLI already discovered and configured by Omarchy. Claude,
   Codex, and OpenCode support bubble conversations; other Omarchy agents open
@@ -55,22 +56,23 @@ none of its state.
 
 ## What it feels like
 
-- Click the creature to ask for something. Enter sends; Escape closes.
-- Right-click the creature for Omarchy's native console scratchpad.
+- Click the orb to ask for something. Enter sends; Escape closes.
+- Right-click the orb for Omarchy's native console scratchpad.
 - On a fresh install it sits at the bottom-right of the active screen; on a
   one-screen laptop that is simply the built-in display.
 - Drag it along an edge to choose its home. Push it into an outer edge to
   tuck it away; pull the visible part back out when you want it.
 - Open the bar widget for status, the latest answer, quick actions, and
   settings. Middle-click asks from that bar's monitor;
-  right-click opens the console there. Its icon is the same creature, in
-  whichever shape you chose, drawn in the bar's own colour.
+  right-click opens the console there. Its icon is the same character — a ring
+  with the band across it, at the temper the orb is actually wearing — drawn in
+  the bar's own colour.
 - Start a new conversation whenever context should not carry forward.
 - The drawn companion watches your pointer while it is over it, and finds
   things to do with itself while nothing is happening — including looking up
   at you.
 
-The creature follows the desktop rather than drawing a second UI language.
+The orb follows the desktop rather than drawing a second UI language.
 Its controls use Omarchy's colors, typography, spacing, panels, focus states,
 and bar conventions. It understands multi-monitor virtual coordinates,
 Hyprland's outer gap, fullscreen workspaces, the chosen default agent, and
@@ -92,7 +94,7 @@ supported, and options that do not apply to the selected pet are left out.
 
 ## Agents
 
-Omarchy Companion discovers the agents Omarchy knows about and follows the desktop
+Omarchy Iris discovers the agents Omarchy knows about and follows the desktop
 default unless you choose another. Claude, Codex, and OpenCode can answer in
 the bubble with session-aware follow-ups. The native console is always the
 escape hatch for a longer or interactive job.
@@ -111,14 +113,14 @@ ordered, but instructions are not a sandbox.
 The console is Omarchy's native scratchpad, including its Quake treatment when
 the installed Omarchy provides it. It makes the work visible, interactive, and
 steerable. It does **not** make the agent sandboxed or promise per-tool
-confirmation. Omarchy Companion follows Omarchy's launcher when it follows the desktop
+confirmation. Omarchy Iris follows Omarchy's launcher when it follows the desktop
 default; an explicitly selected or resumed agent uses that CLI's compatible
 interactive launch mode. Treat both paths as having the filesystem and network
 reach of the selected CLI.
 
-Omarchy Companion does not install agent hooks and does not edit another application's
+Omarchy Iris does not install agent hooks and does not edit another application's
 settings. It may passively read an existing OmaPets-compatible status record
-to reflect working, waiting, success, or error on the creature's face. Without
+to reflect working, waiting, success, or error in the orb's band. Without
 that record, window and rate-limit state provide the fallback.
 
 The plugin makes no network request and sends no telemetry. The agent you
@@ -128,41 +130,39 @@ Private vulnerability reports follow [SECURITY.md](SECURITY.md).
 ## Dressing the companion
 
 The **Companion** section of the bar popout has three more choices when the
-drawn companion is worn. Each one morphs rather than cuts: every shape is
-sampled at the same 64 angles, so going from one to another is an
-interpolation of radii, and an expression slides between two poses the same
-way.
+orb is worn. Each one morphs rather than cuts: a state is a set of numbers
+describing one wave, so going from any state to any other is an interpolation
+of those numbers, and a temper slides the same way.
 
-**Shape** — eight outlines: circle, pebble, squircle, capsule, triangle,
-hexagon, cloud, droplet. The circle is the default and is a true circle; the
-character was measured on one.
+**Glass** — five treatments: glass, clear, frosted, halo, bare. `glass` is the
+default: a dark crown, light pooled at the floor, a rim and a specular
+highlight. `bare` is the band in open air with no sphere at all, which is the
+one that stays legible smallest.
 
-**Colour** — the original palette of twelve, plus a plain white, which is the
-default and what a dark Omarchy theme wants, and **Theme accent**, which wears
-whatever accent the desktop currently has. The eyes are holes rather than
-white shapes, so what shows through them is the theme's background — which is
-why a white body reads correctly and is clipped correctly at the outline.
+**Tint** — six palettes, plus **Theme accent**. `spectrum` is the default and
+is the original's own: four layers spread across red, green, blue and white.
+The accent has no palette of its own, so one is built from it — the accent, two
+neighbours pulled either side of it, and white. Spreading a single hue that way
+is not decoration: four layers of one exact colour sum to a grey-white band and
+lose the refraction that is the point of having four.
 
-**Resting expression** — sixteen faces, worn whenever nothing is happening.
-The whole face is two capsules, so an expression is four levers: where the
-head is pointed, how far apart the eyes sit, their proportions, and each eye's
-own lean. That last one is what makes anger and sadness possible at all — they
-need the eye tops to converge or diverge, which a tilt of the head cannot do.
+**Resting temper** — eight, worn whenever nothing is happening. A temper is the
+band's character at rest: how far it swings, how fast it travels, how far apart
+the four layers are pushed, and how bright the glow is.
 
-![The sixteen resting expressions](docs/expressions.png)
+![The eight resting tempers](docs/tempers.png)
 
-An expression only ever shows on the faces that rest. A mood with news of its
-own overrides it — working thinks, waiting notifies, an error is an
-exclamation mark, finishing bursts, and being carried widens the eyes — and
-those poses are measured off the reference video rather than chosen, which is
-precisely what is being reproduced.
+A temper only ever shows while the orb is resting. A mood with news of its own
+overrides it — working opens the spectrum, waiting stops the band travelling and
+breathes it, an error goes red and tight, finishing blooms past the rim, and
+being carried lets the band lag and slosh.
 
 From a terminal:
 
 ```bash
-omarchy-shell companion shape triangle
-omarchy-shell companion color theme
-omarchy-shell companion expression curieux
+omarchy-shell companion shell frosted
+omarchy-shell companion tint theme
+omarchy-shell companion temper lively
 ```
 
 Each lists what it accepts when given something it does not know. A value is
@@ -176,23 +176,23 @@ catching it feels like catching something — it does one of these:
 
 | | |
 |---|---|
-| `notice` | looks up at whoever is at the desk, holds your eye, then goes back to what it was doing |
+| `notice` | the band lifts towards whoever is at the desk, holds, and settles back |
 | `doze` | falls asleep for a while |
-| `wink` | winks |
-| `stretch` | opens its eyes wide |
-| `egg`, `hexagon`, `tumble` | morphs into another shape and back |
-| `orbit`, `comet` | rings and ribbons go round it |
+| `shimmer` | the spectrum opens and closes across the band |
+| `swell` | the band blooms out to the rim and eases back |
+| `ripple` | a second harmonic crosses the first and passes through it |
+| `spin` | the whole ball turns, light and all, and comes back level |
+| `collapse` | the band draws into a point at the centre and grows back out |
 
-`notice` is the one worth watching for. The eyes do not slide across the face
-to reach you; they travel round the sphere they live on, passing behind the
-body and coming back the other side, and land facing you. A whole turn is the
-same angle as none, so it arrives exactly where it aimed however far round it
-went. On a shape that is not a circle they slide instead — the eyes are
-re-seated to the real outline, so turning them round a triangle makes them hop
-along its profile.
+`notice` is the one worth watching for. It is the only performance that is a
+LOOK rather than a wave: the same machinery the pointer uses, leaning the band
+towards you and then handing it back holding nothing. `spin` is the one that
+shows what the glass is actually doing — the crown and the pool turn with the
+band, because they are the light inside the ball rather than a gradient painted
+over it.
 
 None of these is `working`, `waiting`, `error` or `success`. Those four states
-are how the plugin tells you something has happened, and a creature that
+are how the plugin tells you something has happened, and a companion that
 performed them for its own amusement would be crying wolf.
 
 How often, and how long it rests afterwards, are the existing **activity**
@@ -213,7 +213,7 @@ the ecosystem works. Drop a folder containing `pet.json` and its spritesheet
 into:
 
 ```text
-~/.config/omarchy-companion/pets/<id>/
+~/.config/omarchy-iris/pets/<id>/
 ```
 
 OmaPets folders under `~/.config/omapets/pets/<id>/` are also discovered.
@@ -222,7 +222,7 @@ and relative paths containing traversal are rejected. With more than one
 companion installed, a **Companion** picker appears in the settings; with only
 the bundled one there is nothing to choose between, so it does not.
 
-Omarchy Companion supports Codex/Petdex-style animated atlases and compact expression
+Omarchy Iris supports Codex/Petdex-style animated atlases and compact expression
 grids. A pet can declare a walk cycle, mood cells, blink, idle performances,
 and a themeable hue range. The complete schema is in
 [docs/pets.md](docs/pets.md).
@@ -240,9 +240,9 @@ omarchy-shell companion tuck on
 omarchy-shell companion show
 omarchy-shell companion hide
 omarchy-shell companion status
-omarchy-shell companion shape goutte
+omarchy-shell companion shell halo
 omarchy-shell companion color bleu
-omarchy-shell companion expression heureux
+omarchy-shell companion temper deep
 ```
 
 Every mutation validates its value before changing state. The JSON status
@@ -254,10 +254,10 @@ It is output, not the control plane; the bar talks to the service directly.
 ## Remove
 
 ```bash
-omarchy plugin remove io.github.moerdowo.omarchycompanion
+omarchy plugin remove io.github.moerdowo.omarchyiris
 ```
 
-Confirm Omarchy's removal prompt. Omarchy Companion installs no hooks, background unit,
+Confirm Omarchy's removal prompt. Omarchy Iris installs no hooks, background unit,
 or command outside its plugin folder. Its optional local history and
 recolored-sheet cache remain in
 `$XDG_STATE_HOME/omarchy/companion/` (normally
@@ -270,7 +270,6 @@ them. They can be removed separately if that history is no longer wanted.
 omarchy plugin validate .
 node --test tests/*.test.mjs
 tools/coldstart-check
-tools/verify-bloub-port
 ```
 
 The cold-start test uses an isolated HOME/XDG environment and a real plugin
@@ -279,34 +278,37 @@ missing bundled asset. Since no spritesheet ships any more, it plants one in
 that isolated environment and loads it — a better test of the path a pet
 actually arrives by than bundled artwork was.
 
-`tools/verify-bloub-port` is the check behind this README's claim that the
-drawn companion's geometry is unaltered from the project it came from. It
-fetches that project, samples both engines over every state, shape, expression
-and a set of awkward dates, re-encodes this one's output into the exact strings
-the original produces, and compares them character for character — about
-seventy thousand assertions. It needs the network, so it is a release check
-rather than part of `node --test`.
+There is no equivalent of the previous character's port verifier here, and the
+reason is worth stating rather than leaving as an absence. That character was a
+port of a JavaScript library, so both engines could be run side by side and
+compared character for character. This one is a port of a WebGL shader onto a 2D
+canvas: there is no shared output to diff, and a check that compared rendered
+pixels would be asserting the tuning rather than the geometry. What is checkable
+IS checked — the flank taper, the phase spread, the frame the band has to fit,
+and that every state paints — and `tests/iris.test.mjs` holds those.
 
-Two more generators, neither run at install time:
+One generator, not run at install time:
 
 ```bash
-tools/build-eyefit     # regenerates keystone/BloubFit.js from the upstream solver
-tools/build-preview    # redraws preview.png and docs/expressions.png
+tools/build-preview    # redraws preview.png and docs/tempers.png
 ```
+
+It needs Qt's `qml` tool, because it draws the sheets with the plugin's own
+renderer rather than with a second implementation of it.
 
 Architecture, visual checks, and the release gate are documented in
 [docs/development.md](docs/development.md).
 
 ## License
 
-MIT. Omarchy Companion is a fork of
-[Omarchief](https://github.com/daventhedude/omarchief), Copyright (c) 2026
-Daven Niemann. The drawn companion is a port of
-[bloub](https://github.com/jeremy-prt/bloub), Copyright (c) 2026 Jérémy
-Perret, also MIT. No third-party artwork ships: the companions that carried
-some were removed, and what they leave behind is recorded in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MIT. Omarchy Iris is a fork of
+[Omarchy Companion](https://github.com/moerdowo/omarchy-companion), which is a
+fork of [Omarchief](https://github.com/daventhedude/omarchief), Copyright (c)
+2026 Daven Niemann. The orb is a port of the animated `SiriOrb` component on
+<https://maia.id/>. No third-party artwork ships: the companions that carried
+some were removed, and what they leave behind — along with an open question
+about the orb component's own provenance, which is why this repository is
+private — is recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-Omarchy Companion is independent. It is not endorsed by Omarchy, by the authors of
-the projects it is built from, or by x.ai, whose bot avatar is the shape bloub
-set out to reproduce and the only thing of theirs that appears here.
+Omarchy Iris is independent. It is not endorsed by Omarchy or by the authors of
+the projects it is built from.

@@ -5,7 +5,7 @@ import Quickshell
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
-import "Bloub.js" as Bloub
+import "Iris.js" as Iris
 
 // The chief itself. Pure presentation: the panel tells it the mood, the
 // energy, and what to say — this file does the living. It renders a companion
@@ -32,23 +32,23 @@ Item {
   property var faces: null
   property int columns: 8
   // A companion that is drawn rather than blitted: no sheet and no cells, so
-  // its shape, its colour and its expression are settings instead of pixels
-  // and a change to any of them morphs instead of cutting. It has no legs
-  // either, so it counts as still for everything that would walk it about.
-  property bool bloub: false
-  property string bloubShape: ""
-  property string bloubColor: ""
-  property string bloubExpression: ""
-  readonly property bool still: faces !== null || bloub
+  // its glass, its tint and its temper are settings instead of pixels and a
+  // change to any of them morphs instead of cutting. It has no legs either, so
+  // it counts as still for everything that would walk it about.
+  property bool iris: false
+  property string irisShell: ""
+  property string irisTint: ""
+  property string irisTemper: ""
+  readonly property bool still: faces !== null || iris
   // Walking and performing are separate abilities, and bundling them cost the
   // drawn companion every idle performance it has. A creature with no legs
   // still has things to do with itself; what it cannot do is cross the room.
   // A still SPRITE pet genuinely has neither — its performances are atlas rows
   // it does not own — so this stays false for those.
-  readonly property bool performs: bloub
-  // Whether a resting creature is allowed to change its expression on its
-  // own, and how readily. Nothing moves either way — it is the difference
-  // between a face and a photograph of one.
+  readonly property bool performs: iris
+  // Whether a resting companion is allowed to change its idle look on its own,
+  // and how readily: a sprite pet's face, the orb's temper. Nothing moves
+  // either way — it is the difference between a face and a photograph of one.
   // Whether this artwork may be turned around, and whether it is right now.
   property bool mayMirror: false
   readonly property bool mirrored: mayMirror && Model.mirroredAt(px, width)
@@ -601,7 +601,7 @@ Item {
     id: blinkTimer
     interval: 3200
     repeat: true
-    running: pet.motionEnabled && pet.onStage && !pet.spriteOk && !pet.bloub
+    running: pet.motionEnabled && pet.onStage && !pet.spriteOk && !pet.iris
              && pet.mood !== "sleeping"
     onTriggered: {
       pet.lidsClosed = true
@@ -615,9 +615,9 @@ Item {
 
   Item {
     id: body
-    width: pet.bloub ? pet.petSize
+    width: pet.iris ? pet.petSize
       : pet.spriteOk ? Math.round(pet.petSize * pet.cellAspect) : pet.petSize
-    height: pet.bloub ? pet.petSize
+    height: pet.iris ? pet.petSize
       : pet.spriteOk ? pet.petSize : pet.petSize * 0.82
     x: Math.round(pet.px - width / 2 + pet.tuckSlide)
     // What stands on the line is the creature's feet, not the bottom of the
@@ -628,7 +628,7 @@ Item {
     // of the screen.
     readonly property real groundY: pet.height - height * pet.contentBottom
                                     - pet.groundOffset - pet.hop * pet.petSize * 0.14
-                                    - (pet.bloub ? pet.petSize * Bloub.OVERFLOW : 0)
+                                    - (pet.iris ? pet.petSize * Iris.OVERFLOW : 0)
     y: groundY + (1 - pet.emerge) * (pet.height - groundY + 8) + pet.tuckDrop
 
     // Pixel-art pets keep their silhouette; only the blob gets squashed,
@@ -637,7 +637,7 @@ Item {
       Rotation {
         origin.x: body.width / 2
         origin.y: body.height
-        angle: pet.reduceMotion || pet.spriteOk || pet.bloub ? 0
+        angle: pet.reduceMotion || pet.spriteOk || pet.iris ? 0
           : (pet.walking ? pet.dir * 4 : (hit.containsMouse ? -2 : 0))
         Behavior on angle {
           enabled: !pet.reduceMotion
@@ -651,11 +651,11 @@ Item {
         // curves measured off the reference. A second squash over the top of
         // that reads as a wobble, so it keeps only the press.
         xScale: pet.reduceMotion ? 1
-          : pet.bloub ? (hit.pressed ? 0.94 : 1)
+          : pet.iris ? (hit.pressed ? 0.94 : 1)
           : pet.spriteOk ? (hit.pressed ? 0.95 : 1 - pet.rest * 0.007)
           : (1 - pet.hop * 0.05 + pet.breathe * (pet.mood === "working" ? 0.025 : 0.02)) * (hit.pressed ? 0.94 : 1)
         yScale: pet.reduceMotion ? 1
-          : pet.bloub ? (hit.pressed ? 0.94 : 1)
+          : pet.iris ? (hit.pressed ? 0.94 : 1)
           : pet.spriteOk ? (hit.pressed ? 0.95 : 1 + pet.rest * 0.014)
           : (1 + pet.hop * 0.09 + pet.breathe * (pet.mood === "working" ? -0.05 : 0.045)) * (hit.pressed ? 0.94 : 1)
         Behavior on xScale {
@@ -683,7 +683,7 @@ Item {
       anchors.fill: parent
       // Clipping is off so the orbits may reach past the creature.
       clip: false
-      sourceComponent: pet.bloub ? bloubBody : pet.spriteOk ? spriteBody : blobBody
+      sourceComponent: pet.iris ? irisBody : pet.spriteOk ? spriteBody : blobBody
     }
 
     BorderSurface {
@@ -700,28 +700,28 @@ Item {
   }
 
   // The drawn companion. Everything it needs about the desktop arrives as a
-  // property; everything it knows about itself lives in Bloub.js.
+  // property; everything it knows about itself lives in Iris.js.
   Component {
-    id: bloubBody
-    BloubBody {
+    id: irisBody
+    IrisBody {
       petSize: pet.petSize
       mood: pet.mood
-      shapeId: pet.bloubShape
-      colorId: pet.bloubColor
-      expressionId: pet.bloubExpression
+      shellId: pet.irisShell
+      tintId: pet.irisTint
+      temperId: pet.irisTemper
       accent: pet.bodyColor
-      // What shows through the eyes. They are holes in the original, so the
-      // colour they reveal is the ground the creature stands on, not white.
+      // What the glass tints towards at its crown, so the orb sits on the
+      // wallpaper rather than floating in front of it.
       paper: pet.inkColor
       reduceMotion: pet.reduceMotion
-      expressions: pet.expressions
-      glanceChance: pet.glanceChance
+      tempers: pet.expressions
+      shiftChance: pet.glanceChance
       active: pet.active && pet.onStage
       dragging: hit.holding
       activity: pet.activity
       onPerformanceFinished: pet.activityFinished()
-      // It watches the pointer while the pointer is on it. Tucked away there
-      // is nothing to look up at, and mid-drag the head should stay put.
+      // It leans towards the pointer while the pointer is on it. Tucked away
+      // there is nothing to attend to, and mid-drag the band should stay put.
       pointer: hit.containsMouse && !hit.holding && !pet.tucked
       pointerX: (hit.mouseX - (body.x + body.width / 2 - hit.x)) / Math.max(1, pet.petSize)
       pointerY: (hit.mouseY - (body.y + body.height / 2 - hit.y)) / Math.max(1, pet.petSize)
@@ -1008,9 +1008,9 @@ Item {
 
     Accessible.role: actionable ? Accessible.Button : Accessible.StaticText
     Accessible.ignored: !visible
-    Accessible.name: moodText === "!" ? "Omarchy Companion needs attention"
-      : moodText === "✓" ? "Omarchy Companion finished"
-      : moodText === "✗" ? "Omarchy Companion reported an error" : "Omarchy Companion status"
+    Accessible.name: moodText === "!" ? "Omarchy Iris needs attention"
+      : moodText === "✓" ? "Omarchy Iris finished"
+      : moodText === "✗" ? "Omarchy Iris reported an error" : "Omarchy Iris status"
     Accessible.description: actionable ? "Open the agent console" : ""
     Accessible.focusable: actionable
     Accessible.onPressAction: if (actionable) pet.consoleRequested()
@@ -1092,7 +1092,7 @@ Item {
     Accessible.role: actionable ? Accessible.Button : Accessible.StaticText
     Accessible.ignored: !visible
     Accessible.name: pet.sayMode === "think"
-      ? (pet.doing !== "" ? "Omarchy Companion is working: " + pet.doing : "Omarchy Companion is working")
+      ? (pet.doing !== "" ? "Omarchy Iris is working: " + pet.doing : "Omarchy Iris is working")
       : pet.sayText
     Accessible.description: pet.sayMode === "error" ? "Open the agent console"
       : pet.sayMode === "say" ? "Dismiss this reply" : ""
@@ -1266,7 +1266,7 @@ Item {
     font.family: Style.font.family
     font.pixelSize: Style.font.body
     selectByMouse: true
-    Accessible.name: "Ask Omarchy Companion"
+    Accessible.name: "Ask Omarchy Iris"
     Accessible.description: "Enter an instruction. Press Escape to close."
     onAccepted: {
       var draft = text
@@ -1346,7 +1346,7 @@ Item {
 
     Accessible.role: Accessible.Button
     Accessible.ignored: !pet.onStage
-    Accessible.name: "Omarchy Companion"
+    Accessible.name: "Omarchy Iris"
     Accessible.description: pet.tooltipText
     Accessible.focusable: pet.promptOpen
     Accessible.focused: activeFocus

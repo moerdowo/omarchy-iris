@@ -1,0 +1,26 @@
+Iris — the drawn companion bundled with Omarchy Iris
+
+This folder holds no artwork. The character is code: `keystone/Iris.js`
+computes its band, its glass and its halo every frame, and `pet.json` only
+says which renderer to use and how large it prefers to be.
+
+That code is a port of the animated orb on https://maia.id/ — the author's
+own site — where it is a Framer code component named `SiriOrb`: a four-pass
+WebGL2 pipeline whose wave shader draws four copies of one sine wave, spread
+in phase across an RGB spectrum, summed additively and composited into a
+circular glass panel with refraction and a rim highlight.
+
+The port carries over the CONSTRUCTION, not the technique. It draws on a QML
+Canvas rather than in a fragment shader, so the accumulation is layered
+strokes instead of per-pixel, and there is no refraction pass — a 2D canvas
+cannot sample what is behind it. What is faithful is the geometry: the four
+phase offsets, the cosine-squared flank taper, the gaussian that gathers the
+band towards the middle, and the additive sum that turns overlapping crests
+white while the tails stay saturated.
+
+Where the port departs deliberately, `keystone/Iris.js` says so at the line
+that departs — the frequency, the aberration and the falloff are all measured
+over a different width here than in the original, and carrying those three
+numbers across unchanged does not reproduce the orb, it strangles it.
+
+See the repository's `THIRD_PARTY_NOTICES.md`.

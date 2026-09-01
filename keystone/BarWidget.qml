@@ -4,11 +4,11 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Omarchy Companion's bar surface is deliberately thin: the service owns all state,
+// Omarchy Iris's bar surface is deliberately thin: the service owns all state,
 // this instance only presents the state for its monitor and anchors Panel.qml.
 BarWidget {
   id: root
-  moduleName: "io.github.moerdowo.omarchycompanion"
+  moduleName: "io.github.moerdowo.omarchyiris"
 
   readonly property var service: bar && bar.shell ? bar.shell.serviceFor(moduleName) : null
   readonly property string monitorName: {
@@ -40,11 +40,12 @@ BarWidget {
     : shown && hasAgent ? (bar ? bar.barForeground : Color.foreground)
     : Qt.darker(bar ? bar.barForeground : Color.foreground, 1.8)
 
-  // What the creature is wearing, so the bar's mark is the same character as
-  // the one on the desktop rather than a stand-in for it.
-  readonly property string shapeId: service ? String(service.cfgShape || "") : ""
-  readonly property string expressionId: service ? String(service.cfgExpression || "") : ""
-  readonly property bool drawn: service ? service.bloubPet === true : true
+  // What the orb is wearing, so the bar's mark is the same character as the
+  // one on the desktop rather than a stand-in for it. The glass and the tint
+  // are not read: a mark carries neither, so asking for them would repaint it
+  // every time a setting it does not draw changed.
+  readonly property string temperId: service ? String(service.cfgTemper || "") : ""
+  readonly property bool drawn: service ? service.irisPet === true : true
 
   // Ink, not an em box. A bar's glyphs carry their drawing inside a font cell
   // that is larger than the ink in it, so a mark drawn at the full icon size
@@ -52,8 +53,8 @@ BarWidget {
   readonly property int markSize: Math.max(11, Math.round(Style.bar.iconFont * 0.72))
 
   readonly property string tooltipText: {
-    if (!service) return "Omarchy Companion · starting"
-    var lines = ["Omarchy Companion · " + stateLabel(), "Agent · " + agentLabel]
+    if (!service) return "Omarchy Iris · starting"
+    var lines = ["Omarchy Iris · " + stateLabel(), "Agent · " + agentLabel]
     lines.push("Middle-click asks · right-click opens the console")
     return lines.join("\n")
   }
@@ -140,8 +141,7 @@ BarWidget {
       anchors.centerIn: parent
       visible: root.drawn
       size: root.markSize
-      shapeId: root.shapeId
-      expressionId: root.expressionId
+      temperId: root.temperId
       mood: root.mood
       // Exactly what WidgetButton paints its own glyph with, so the mark
       // brightens and dims with the row instead of beside it.

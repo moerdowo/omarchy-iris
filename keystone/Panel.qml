@@ -4,14 +4,14 @@ import Quickshell
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
-import "Bloub.js" as Bloub
+import "Iris.js" as Iris
 
-// A monitor-local control surface over the single Omarchy Companion service.
+// A monitor-local control surface over the single Omarchy Iris service.
 // The panel never shells out and never mirrors state through a file: every
-// label and action talks to the same object that owns the desktop creature.
+// label and action talks to the same object that owns the desktop companion.
 Panel {
   id: root
-  moduleName: "io.github.moerdowo.omarchycompanion"
+  moduleName: "io.github.moerdowo.omarchyiris"
   manageIpc: false
 
   property var anchorItem: null
@@ -52,7 +52,7 @@ Panel {
   readonly property string pinnedScreen: ready ? String(service.cfgScreen || "") : ""
   // A drawn companion is nothing but expressions, so it always has them; a
   // sprite one only when its artist drew faces it may borrow.
-  readonly property bool drawnPet: ready && service.bloubPet === true
+  readonly property bool drawnPet: ready && service.irisPet === true
   readonly property bool hasFaces: drawnPet || (ready && Model.glanceFaces(
     service.spriteFaces, service.spriteIdleFaces, service.spriteRows, service.spriteColumns).length > 0)
   readonly property bool canBubble: ready && hasAgent && Model.canTalkTo(agentId)
@@ -100,9 +100,9 @@ Panel {
     oftenValue(),
     ready ? "Custom · " + Math.round(Number(service.cfgGlanceChance) * 100) + "%" : "")
   // A companion is company, not a window. These were sized for the drawn
-  // spritesheets, whose faces need pixels to read at all; the drawn companion
-  // is two capsules on a shape and stays legible far smaller, so the whole
-  // scale comes down and S is genuinely small rather than merely smallest.
+  // spritesheets, whose faces need pixels to read at all; the orb is a band of
+  // light in a ball and stays legible far smaller, so the whole scale comes
+  // down and S is genuinely small rather than merely smallest.
   readonly property var sizePresets: [
     { value: "48", label: "S" },
     { value: "64", label: "M" },
@@ -125,7 +125,7 @@ Panel {
       var id = entry && typeof entry === "object" ? String(entry.id || "") : String(entry || "")
       // Following Omarchy's default remains future-proof because its own
       // launcher owns that command. An explicit override is only offered when
-      // Omarchy Companion can actually build the corresponding console command.
+      // Omarchy Iris can actually build the corresponding console command.
       if (id !== "" && Model.canOpenConsole(id)) {
         if (id === configuredAgent) foundConfigured = true
         out.push({
@@ -155,15 +155,15 @@ Panel {
     return out
   }
 
-  // The drawn companion's three catalogues. They come from Bloub.js rather
-  // than from the service so that the panel shows every choice the character
-  // actually has, in the character's own order, and never a stale copy.
-  readonly property var shapeOptions: Bloub.panelOptions(Bloub.SHAPES)
-  readonly property var colorOptions: Bloub.panelOptions(Bloub.COLORS)
-  readonly property var expressionOptions: Bloub.panelOptions(Bloub.EXPRESSIONS)
-  readonly property string shapeId: ready ? String(service.cfgShape || "") : ""
-  readonly property string colorId: ready ? String(service.cfgColor || "") : ""
-  readonly property string expressionId: ready ? String(service.cfgExpression || "") : ""
+  // The orb's three catalogues. They come from Iris.js rather than from the
+  // service so that the panel shows every choice the character actually has,
+  // in the character's own order, and never a stale copy.
+  readonly property var shellOptions: Iris.panelOptions(Iris.SHELLS)
+  readonly property var tintOptions: Iris.panelOptions(Iris.TINTS)
+  readonly property var temperOptions: Iris.panelOptions(Iris.TEMPERS)
+  readonly property string shellId: ready ? String(service.cfgShell || "") : ""
+  readonly property string tintId: ready ? String(service.cfgTint || "") : ""
+  readonly property string temperId: ready ? String(service.cfgTemper || "") : ""
 
   readonly property var screenOptions: {
     var out = [{ value: "", label: "Not pinned" }]
@@ -182,8 +182,8 @@ Panel {
 
   readonly property bool dropdownOwnsKeys: agentDropdown.popupOpen
     || petDropdown.popupOpen || screenDropdown.popupOpen
-    || shapeDropdown.popupOpen || colorDropdown.popupOpen
-    || expressionDropdown.popupOpen
+    || shellDropdown.popupOpen || tintDropdown.popupOpen
+    || temperDropdown.popupOpen
 
   function cleanLabel(value, fallback) {
     var text = String(value || fallback || "").replace(/[\r\n\t]+/g, " ").trim()
@@ -201,9 +201,9 @@ Panel {
     agentDropdown.value = ready && service.agentIsDefault ? "" : agentId
     petDropdown.value = petId
     screenDropdown.value = pinnedScreen
-    shapeDropdown.value = shapeId
-    colorDropdown.value = colorId
-    expressionDropdown.value = expressionId
+    shellDropdown.value = shellId
+    tintDropdown.value = tintId
+    temperDropdown.value = temperId
   }
 
   function agentName(id) {
@@ -249,7 +249,7 @@ Panel {
   }
 
   function contextTitle() {
-    if (!ready) return "Starting Omarchy Companion"
+    if (!ready) return "Starting Omarchy Iris"
     if (!hasAgent) return "Choose an agent to take orders"
     if (mood === "error") return "The agent could not finish"
     if (service.agentSilent === true) return "Still working"
@@ -342,9 +342,9 @@ Panel {
     agentDropdown.close()
     petDropdown.close()
     screenDropdown.close()
-    shapeDropdown.close()
-    colorDropdown.close()
-    expressionDropdown.close()
+    shellDropdown.close()
+    tintDropdown.close()
+    temperDropdown.close()
   }
 
   function close() {
@@ -385,9 +385,9 @@ Panel {
     if (canBubble && service && service.cfgTalk) settingsIds.push("conversation")
     if (petOptions.length > 1) settingsIds.push("pet")
     if (drawnPet) {
-      settingsIds.push("shape")
-      settingsIds.push("color")
-      settingsIds.push("expression")
+      settingsIds.push("shell")
+      settingsIds.push("tint")
+      settingsIds.push("temper")
     }
     if (canTheme) settingsIds.push("theme")
     if (hasFaces) {
@@ -417,9 +417,9 @@ Panel {
       case "talk": return talkToggle
       case "conversation": return conversationGroup
       case "pet": return petDropdown
-      case "shape": return shapeDropdown
-      case "color": return colorDropdown
-      case "expression": return expressionDropdown
+      case "shell": return shellDropdown
+      case "tint": return tintDropdown
+      case "temper": return temperDropdown
       case "theme": return themeToggle
       case "expressions": return expressionsToggle
       case "often": return oftenGroup
@@ -553,9 +553,9 @@ Panel {
       case "talk": setSetting("talk", !service.cfgTalk); break
       case "conversation": setSetting("sessionIdleMin", Number(conversationOptions[conversationCursor].value)); break
       case "pet": petDropdown.toggle(); break
-      case "shape": shapeDropdown.toggle(); break
-      case "color": colorDropdown.toggle(); break
-      case "expression": expressionDropdown.toggle(); break
+      case "shell": shellDropdown.toggle(); break
+      case "tint": tintDropdown.toggle(); break
+      case "temper": temperDropdown.toggle(); break
       case "theme": setSetting("theme", !service.cfgTheme); break
       case "expressions": setSetting("expressions", !service.cfgExpressions); break
       case "often": setSetting("expressionChance", Number(oftenOptions[oftenCursor].value)); break
@@ -666,7 +666,7 @@ Panel {
             PanelHero {
               id: overviewHero
               width: parent.width
-              title: "Omarchy Companion"
+              title: "Omarchy Iris"
               meta: root.heroMeta()
               detail: root.ready ? root.energyPercent + "%" : ""
               foreground: root.foreground
@@ -858,7 +858,7 @@ Panel {
             PanelHero {
               id: settingsHero
               width: parent.width
-              title: "Omarchy Companion"
+              title: "Omarchy Iris"
               meta: "Settings · changes apply immediately"
               detail: root.monitorName
               foreground: root.foreground
@@ -996,57 +996,58 @@ Panel {
             }
 
             // A drawn companion has no artwork to recolour, so the choices a
-            // sheet cannot offer are offered instead: its outline, its colour
-            // and the face it wears when nothing is happening. Each change
-            // morphs on screen rather than cutting, which is the whole reason
-            // a drawn body is worth having.
+            // sheet cannot offer are offered instead: the glass it is read
+            // through, the spectrum its band is painted with, and how that
+            // band behaves when nothing is happening. Each change morphs on
+            // screen rather than cutting, which is the whole reason a drawn
+            // body is worth having.
             Dropdown {
-              id: shapeDropdown
+              id: shellDropdown
               visible: root.drawnPet
               width: parent.width
-              label: "Shape"
+              label: "Glass"
               value: ""
-              options: root.shapeOptions
+              options: root.shellOptions
               foreground: root.foreground
               fontFamily: root.fontFamily
-              hasCursor: root.cursorActive && root.focusId === "shape"
-              onHovered: function(on) { if (on) root.setCursor("shape", shapeDropdown) }
+              hasCursor: root.cursorActive && root.focusId === "shell"
+              onHovered: function(on) { if (on) root.setCursor("shell", shellDropdown) }
               onChanged: function(value) {
-                root.setSetting("shape", value)
+                root.setSetting("shell", value)
                 Qt.callLater(root.syncDropdownValues)
               }
             }
 
             Dropdown {
-              id: colorDropdown
+              id: tintDropdown
               visible: root.drawnPet
               width: parent.width
-              label: "Colour"
+              label: "Tint"
               value: ""
-              options: root.colorOptions
+              options: root.tintOptions
               foreground: root.foreground
               fontFamily: root.fontFamily
-              hasCursor: root.cursorActive && root.focusId === "color"
-              onHovered: function(on) { if (on) root.setCursor("color", colorDropdown) }
+              hasCursor: root.cursorActive && root.focusId === "tint"
+              onHovered: function(on) { if (on) root.setCursor("tint", tintDropdown) }
               onChanged: function(value) {
-                root.setSetting("color", value)
+                root.setSetting("tint", value)
                 Qt.callLater(root.syncDropdownValues)
               }
             }
 
             Dropdown {
-              id: expressionDropdown
+              id: temperDropdown
               visible: root.drawnPet
               width: parent.width
-              label: "Resting expression"
+              label: "Resting temper"
               value: ""
-              options: root.expressionOptions
+              options: root.temperOptions
               foreground: root.foreground
               fontFamily: root.fontFamily
-              hasCursor: root.cursorActive && root.focusId === "expression"
-              onHovered: function(on) { if (on) root.setCursor("expression", expressionDropdown) }
+              hasCursor: root.cursorActive && root.focusId === "temper"
+              onHovered: function(on) { if (on) root.setCursor("temper", temperDropdown) }
               onChanged: function(value) {
-                root.setSetting("expression", value)
+                root.setSetting("temper", value)
                 Qt.callLater(root.syncDropdownValues)
               }
             }
@@ -1069,8 +1070,10 @@ Panel {
               id: expressionsToggle
               visible: root.hasFaces
               width: parent.width
-              label: "Idle expressions"
-              description: "Changes expression occasionally while resting"
+              label: "Idle changes"
+              description: root.drawnPet
+                ? "Shifts temper occasionally while resting"
+                : "Changes expression occasionally while resting"
               checked: service ? service.cfgExpressions : false
               foreground: root.foreground
               fontFamily: root.fontFamily

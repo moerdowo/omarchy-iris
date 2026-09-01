@@ -118,7 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           for f in README.md LICENSE SECURITY.md THIRD_PARTY_NOTICES.md \
-                   preview.png docs/expressions.png; do
+                   preview.png docs/tempers.png; do
             [[ -s $f ]] || { echo "missing or empty: $f" >&2; exit 1; }
           done
           version=$(jq -r .version manifest.json)
@@ -127,8 +127,8 @@ jobs:
             || { echo "CHANGELOG.md has no dated entry for $version" >&2; exit 1; }
           ! grep -Eiq "^## ${version_pattern} — unreleased$" CHANGELOG.md \
             || { echo "CHANGELOG.md still marks $version unreleased" >&2; exit 1; }
-          grep -Fqx 'omarchy plugin add https://github.com/moerdowo/omarchy-companion.git --enable' README.md
-          grep -Fqx 'omarchy plugin remove io.github.moerdowo.omarchycompanion' README.md
+          grep -Fqx 'omarchy plugin add https://github.com/moerdowo/omarchy-iris.git --enable' README.md
+          grep -Fqx 'omarchy plugin remove io.github.moerdowo.omarchyiris' README.md
           ! grep -Eq 'omarchy plugin (add|remove).*--yes' README.md \
             || { echo "README.md bypasses Omarchy's install/remove confirmation" >&2; exit 1; }
       - name: release payload is clean
@@ -141,9 +141,9 @@ jobs:
             # this plugin has to actually ship, and no sheet at all; a blitted
             # one names a sheet that has to be there and a grid to cut it on.
             if jq -e 'has("render")' "$pet" > /dev/null; then
-              jq -e '.render == "bloub" and (has("spritesheetPath") | not)' "$pet" > /dev/null \
+              jq -e '.render == "iris" and (has("spritesheetPath") | not)' "$pet" > /dev/null \
                 || { echo "$pet is drawn but malformed" >&2; exit 1; }
-              [[ -s keystone/Bloub.js && -s keystone/BloubFit.js && -s keystone/BloubBody.qml ]] \
+              [[ -s keystone/Iris.js && -s keystone/IrisBody.qml ]] \
                 || { echo "$pet names a renderer this plugin does not ship" >&2; exit 1; }
               continue
             fi
@@ -157,11 +157,11 @@ jobs:
         run: |
           set -euo pipefail
           for t in tools/coldstart-check tools/perform-check tools/companion-recolor \
-                   tools/build-eyefit tools/verify-bloub-port tools/build-preview; do
+                   tools/build-preview; do
             [[ -x $t ]] || { echo "$t is not executable" >&2; exit 1; }
           done
           bash -n tools/coldstart-check tools/perform-check tools/companion-recolor \
-            tools/build-eyefit tools/verify-bloub-port tools/build-preview
+            tools/build-preview
           python3 - <<'PY'
           import ast
           from pathlib import Path

@@ -1,7 +1,7 @@
-# Making a pet for Omarchy Companion
+# Making a pet for Omarchy Iris
 
 A pet is a folder with a `pet.json` and one spritesheet. Drop it into
-`~/.config/omarchy-companion/pets/<id>/` and it appears under **Companion** in the
+`~/.config/omarchy-iris/pets/<id>/` and it appears under **Companion** in the
 bar widget's settings. To name it without the panel:
 
 ```bash
@@ -16,8 +16,8 @@ of truth.
 
 Codex/Petdex v1 and v2 pets work as they are. Rows 0–8 keep their standard
 meaning. A v2 manifest sets `spriteVersionNumber` to `2` and reserves rows
-9–10 for its sixteen look directions; Omarchy Companion leaves those rows intact.
-Optional Omarchy Companion activities are explicitly declared and belong after the
+9–10 for its sixteen look directions; Omarchy Iris leaves those rows intact.
+Optional Omarchy Iris activities are explicitly declared and belong after the
 standard atlas: row 9 onward for v1, row 11 onward for v2.
 
 ## A pet that has no artwork
@@ -28,15 +28,15 @@ grid, cell, atlas or theme-repaint machinery in this document applies to it.
 
 ```json
 {
-  "id": "bloub",
-  "displayName": "Bloub",
+  "id": "iris",
+  "displayName": "Iris",
   "description": "One sentence, shown wherever pets are listed.",
-  "render": "bloub",
+  "render": "iris",
   "size": 130
 }
 ```
 
-`render` is the only field that makes it one, and `bloub` is the only renderer
+`render` is the only field that makes it one, and `iris` is the only renderer
 this plugin ships. `size` and `content` are read, because they are about
 placing a body on a desktop rather than about artwork; everything else is
 ignored. There is no `spritesheetPath`, no `rows`, no `faces`, no `themeable`.
@@ -54,7 +54,7 @@ they are scheduled by exactly the machinery on this page — the same *how often
 and *how long it rests*, the same Play button, the same `play <name>`.
 
 Adding a second renderer would mean a second `keystone/<Name>Body.qml` and a
-branch beside `bloub` in `Service.qml` and `Chief.qml`. The pet format has
+branch beside `iris` in `Service.qml` and `Chief.qml`. The pet format has
 room for it; nothing else here needs to change.
 
 ## The sheet
@@ -62,7 +62,7 @@ room for it; nothing else here needs to change.
 Every sheet is a regular grid of equal-size cells. A Codex/Petdex animated
 atlas uses the ecosystem's eight columns of 192 × 208 frames. An expression
 grid may declare another `columns` value and may use rectangular cells of any
-proportion; Omarchy Companion measures their aspect ratio from the loaded sheet.
+proportion; Omarchy Iris measures their aspect ratio from the loaded sheet.
 Keep the sheet width evenly divisible by `columns` and its height evenly
 divisible by `rows`, so filtering never samples across a cell boundary.
 
@@ -119,7 +119,7 @@ left blank, so a reader that plays them shows something sensible.
 | `idleFaces` | Optional list of `[row, column]` cells a resting expression pet may borrow. Invalid, duplicate, out-of-grid, and `idle` cells are discarded; when omitted, the neutral `parked`, `success`, `love`, and `dragged` faces form the pool |
 | `blink` | One cell, the resting face with its eyes closed. Shown for a moment every few seconds — see below |
 | `content` | Where the drawing sits inside its cell: `{ "left", "right", "top", "bottom" }` as fractions — see below |
-| `mirror` | `true` if the drawing may be flipped when the creature stands on the right of the screen. See below |
+| `mirror` | `true` if the drawing may be flipped when the pet stands on the right of the screen. See below |
 | `rows` | How many rows the sheet has. Without it, nine are assumed (eleven for `spriteVersionNumber` 2) |
 | `walkFrames` | How long the walk cycle is. A cycle shorter than eight columns stutters through the empty cells without this |
 | `sleepRow` | A row holding a real sleeping pose. Without it, the resting pose is simply dimmed |
@@ -339,7 +339,7 @@ A single still pose, such as a vehicle or a portrait, is built that way.
 ## Building an animated sheet
 
 `tools/build-atlas.py` does all of the above. Supply your own aligned renders;
-the paths below are examples and are not part of Omarchy Companion's artwork-source
+the paths below are examples and are not part of Omarchy Iris's artwork-source
 archive:
 
 ```bash
