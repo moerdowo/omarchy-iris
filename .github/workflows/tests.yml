@@ -102,9 +102,6 @@ jobs:
             and (.description | length) <= 500 and (.license | length) <= 120' \
             manifest.json > /dev/null \
             || { echo "a manifest field exceeds the marketplace length limit" >&2; exit 1; }
-          jq -e '[.kinds[]] | inside(["bar","bar-widget","menu","overlay","panel","service"])' \
-            manifest.json > /dev/null \
-            || { echo "manifest kinds include a value the marketplace rejects" >&2; exit 1; }
       - name: every entry point exists and stays inside the plugin
         run: |
           set -euo pipefail

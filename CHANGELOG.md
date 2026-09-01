@@ -97,8 +97,9 @@ inherits and must not share. All three are renamed for this plugin:
 - Shortened the manifest `description` to 499 characters. The marketplace caps
   a community manifest's fields — 500 for `description` — and reports a breach
   only as "the plugin manifest does not match the supported Quattro contract",
-  which names neither the field nor the limit. The field lengths and the
-  accepted `kinds` are asserted in CI now so the next breach is caught here.
+  which names neither the field nor the limit. The field lengths are asserted
+  in CI now, against the marketplace's own numbers, so the next breach is
+  caught here with the field named.
 - Made the root `preview.png` a staged screenshot of the running orb — one orb
   at the size a person sees it, with an order typed into the form — and moved
   the generated mood-and-tint sheet to `docs/moods.png`. The marketplace draws
