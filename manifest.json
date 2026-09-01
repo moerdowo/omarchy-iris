@@ -5,7 +5,7 @@
   "version": "3.0.0",
   "author": "moerdowo",
   "license": "MIT",
-  "description": "Your desktop's chief of staff, wearing a glass orb: an Omarchy-native companion that lives at the screen edge, takes orders through your configured AI agent, and keeps session-aware conversations in place. Its band of light is computed rather than blitted, so its glass, its tint and its resting temper are settings that morph rather than artwork that cuts. Drag or tuck it, move it across monitors, get replies in a bubble or hand work to Omarchy's native console, and keep status and settings one click away in the bar — without a daemon, hook, or extra package.",
+  "description": "Your desktop's chief of staff, wearing a glass orb: an Omarchy-native companion that lives at the screen edge, takes orders through your configured AI agent, and keeps session-aware conversations in place. Its band of light is computed rather than blitted, so its glass, its tint and its resting temper are settings that morph rather than artwork that cuts. Drag or tuck it, move it between monitors, get replies in a bubble or hand work to the native console, and keep it one click away in the bar.",
   "kinds": [
     "service",
     "bar-widget"

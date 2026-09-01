@@ -94,6 +94,17 @@ jobs:
           jq -e '.id | test("^[A-Za-z0-9][A-Za-z0-9._-]*$") and (startswith("omarchy.") | not)' \
             manifest.json > /dev/null
           jq -e '(.kinds | type) == "array" and (.kinds | length) > 0' manifest.json > /dev/null
+          # The marketplace rejects a community manifest whose fields exceed
+          # these lengths, and reports it only as "does not match the supported
+          # Quattro contract" — which names no field. Catch it here instead.
+          jq -e '(.id | length) <= 128 and (.name | length) <= 120
+            and (.version | length) <= 64 and (.author | length) <= 120
+            and (.description | length) <= 500 and (.license | length) <= 120' \
+            manifest.json > /dev/null \
+            || { echo "a manifest field exceeds the marketplace length limit" >&2; exit 1; }
+          jq -e '[.kinds[]] | inside(["bar","bar-widget","menu","overlay","panel","service"])' \
+            manifest.json > /dev/null \
+            || { echo "manifest kinds include a value the marketplace rejects" >&2; exit 1; }
       - name: every entry point exists and stays inside the plugin
         run: |
           set -euo pipefail
