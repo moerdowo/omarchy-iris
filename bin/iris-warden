@@ -1122,8 +1122,15 @@ def cmd_preflight(args):
                     "/usr/bin/touch", "/mnt/probe"]
         done = subprocess.run(command, capture_output=True, text=True, timeout=20)
         if done.returncode != 0:
-            report["reasons"].append(
-                (done.stderr or "bubblewrap could not build a sandbox").strip().split("\n")[-1])
+            raw = (done.stderr or "").strip().split("\n")[-1]
+            # Translate the one failure a person can actually act on. Trusting
+            # the version string for this was wrong: a distribution build can
+            # report 0.9 and still not take --overlay, and the runner that
+            # proved it is the one this plugin's own CI runs on.
+            if "--overlay" in raw and "nknown option" in raw:
+                raw = ("this bubblewrap cannot stage writes: --overlay needs 0.9 or newer"
+                       + (" (found %s)" % printed if printed else ""))
+            report["reasons"].append(raw or "bubblewrap could not build a sandbox")
         elif not os.path.exists(os.path.join(probe, "upper", "probe")):
             report["reasons"].append("the overlay did not stage its writes")
         else:

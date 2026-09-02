@@ -60,6 +60,29 @@ test("preflight answers about this machine, in JSON, either way", () => {
   }
 })
 
+test("a bubblewrap without --overlay is reported as one, on any machine", () => {
+  // Machine-independent, because the machine that proved this was needed is
+  // the hosted runner: its bubblewrap reports 0.9 and still refuses the
+  // option, so a version comparison is not the test. The message is.
+  const root = scratch()
+  const bin = join(root, "bin")
+  mkdirSync(bin)
+  writeFileSync(join(bin, "bwrap"), [
+    "#!/usr/bin/env bash",
+    "[ \"$1\" = \"--version\" ] && { echo \"bubblewrap 0.9.0\"; exit 0; }",
+    "echo \"bwrap: Unknown option --overlay-src\" >&2",
+    "exit 1",
+    ""
+  ].join("\n"))
+  chmodSync(join(bin, "bwrap"), 0o755)
+
+  const done = run(["preflight"], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } })
+  const report = JSON.parse(done.stdout)
+  assert.equal(report.ok, false)
+  assert.match(report.reasons[0], /--overlay needs 0\.9 or newer/)
+  assert.doesNotMatch(report.reasons[0], /Unknown option/)
+})
+
 test("an unknown work directory has staged nothing", () => {
   const root = scratch()
   const workdir = join(root, "work")
