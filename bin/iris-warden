@@ -1,0 +1,1156 @@
+#!/usr/bin/env python3
+"""The warden: the boundary Omarchy Iris puts around an unattended agent.
+
+A bubble order is a sentence typed into a bar widget, and it used to become a
+headless agent running as the user with that CLI's whole reach. Standing
+instructions asked it to behave. Instructions are not a boundary, so this is
+the boundary.
+
+Everything the agent may do without asking happens inside a bubblewrap
+sandbox that cannot reach anything worth losing:
+
+  filesystem  a read-only system, no real ``$HOME`` at all, and the work
+              directory mounted through an overlay, so every write lands in a
+              staging layer the agent cannot tell apart from the real tree.
+  network     its own empty network namespace with no resolver. The only way
+              out is a CONNECT proxy on loopback that hands each host to the
+              broker out here, which knows the allowlist.
+  the desktop no Wayland socket, no Hyprland socket, no D-Bus, no agent hooks.
+              ``iris-do`` submits a command to the broker instead.
+
+Consent is asked for the three things that leave the sandbox: a connection to
+a host that is not on the allowlist, a command to run out here, and the moment
+the staged writes are published into the real work directory. Each one is one
+explicit answer from the person at the desktop; none of them can be answered
+by the agent, because the agent is on the other side of the socket.
+
+Subcommands used out here by the plugin:
+
+  run        prepare the sandbox, serve the broker, run the agent in it
+  preflight  report whether this kernel and this install can enforce any of it
+  changes    what the last run staged, as JSON
+  apply      publish the staged changes into the work directory
+  discard    throw the staging layer away
+
+Subcommands used inside the sandbox, reached only through /iris/bin:
+
+  supervise  start the loopback proxy, then exec the agent
+  ask        submit one command to the broker and print what it did
+"""
+
+import argparse
+import errno
+import hashlib
+import json
+import os
+import re
+import select
+import shutil
+import signal
+import socket
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+# Where the sandbox sees the pieces we hand it. These are the only paths
+# inside that Iris owns; everything else is either the read-only system or
+# the work directory at its real path.
+SANDBOX_HOME = "/iris/home"
+SANDBOX_BIN = "/iris/bin"
+SANDBOX_RUN = "/iris/run"
+BROKER_SOCKET = SANDBOX_RUN + "/broker.sock"
+PROXY_PORT = 8118
+
+# A consent answer is a person moving a mouse. Waiting forever would hang a
+# turn behind a bubble nobody is looking at; the turn timeout would then kill
+# it with no explanation. Refusing after two minutes is the explanation.
+CONSENT_TIMEOUT = 120.0
+# A brokered command runs out here with the user's own reach, so it gets a
+# short leash and a bounded transcript.
+EXEC_TIMEOUT = 120.0
+EXEC_OUTPUT_MAX = 16384
+
+# What each agent must reach to be the agent at all. Nothing else resolves,
+# and anything else asks. Kept deliberately short: a host that is missing
+# costs one consent prompt, a host that is wrongly present costs the point of
+# the exercise.
+DEFAULT_HOSTS = {
+    "claude": ["api.anthropic.com", "statsig.anthropic.com"],
+    "codex": ["api.openai.com", "auth.openai.com", "chatgpt.com"],
+    "opencode": ["api.anthropic.com", "api.openai.com", "models.dev", "opencode.ai"],
+}
+
+# The credential each agent needs to authenticate, bound in read-only and one
+# file at a time. The agent's real configuration directory is never mounted:
+# it holds settings and hook definitions, and a sandbox that can write the
+# hooks of the CLI that runs outside it is not a sandbox.
+CREDENTIALS = {
+    "claude": [(".claude/.credentials.json", ".claude/.credentials.json")],
+    "codex": [(".codex/auth.json", ".codex/auth.json")],
+    "opencode": [(".local/share/opencode/auth.json", ".local/share/opencode/auth.json")],
+}
+
+# Environment is an allowlist, not a filter. A blanket os.environ carries
+# SSH_AUTH_SOCK, WAYLAND_DISPLAY, DBUS_SESSION_BUS_ADDRESS and every token the
+# user's shell exports into a place that is supposed to have none of them.
+ENV_KEEP = ("LANG", "LC_ALL", "LC_CTYPE", "LC_TIME", "TZ", "TERM")
+ENV_KEEP_PREFIX = ("ANTHROPIC_", "OPENAI_", "OPENCODE_", "CODEX_")
+# ...with the exception of the ones that would point an agent at a different
+# base URL, or hand it a proxy that is not ours.
+ENV_DENY = re.compile(r"(PROXY|BASE_URL|_URL|CONFIG_DIR|HOME)$", re.IGNORECASE)
+
+HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,252}[A-Za-z0-9])?$")
+
+
+def fail(message, code=2):
+    sys.stderr.write("iris-warden: " + message + "\n")
+    raise SystemExit(code)
+
+
+def state_root(explicit):
+    if explicit:
+        return os.path.abspath(explicit)
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "state")
+    return os.path.join(base, "omarchy", "iris", "warden")
+
+
+def private_dir(path):
+    """A directory only this user can reach, verified rather than assumed."""
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+    return path
+
+
+def runtime_root(root):
+    """Somewhere short-lived and, above all, short.
+
+    A unix socket path is capped near 108 bytes, and a state directory under
+    a long $HOME plus a per-turn subdirectory can pass that on a perfectly
+    ordinary machine. The session runtime directory is the right home for a
+    socket anyway; the state tree is only the fallback.
+    """
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime and os.path.isdir(runtime):
+        return private_dir(os.path.join(runtime, "iris-warden"))
+    return private_dir(os.path.join(root, "run"))
+
+
+def stage_for(root, workdir):
+    """One staging layer per work directory, stable across runs.
+
+    A follow-up order has to see what the previous one wrote, or the second
+    half of a two-step job edits a file that, as far as it can tell, was never
+    touched. The digest keeps the name short and keeps two work directories
+    that share a basename apart.
+    """
+    slug = hashlib.sha256(workdir.encode("utf-8")).hexdigest()[:16]
+    stage = os.path.join(root, "stage", slug)
+    private_dir(os.path.join(stage, "upper"))
+    private_dir(os.path.join(stage, "work"))
+    marker = os.path.join(stage, "workdir")
+    tmp = marker + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(workdir + "\n")
+    os.replace(tmp, marker)
+    return stage
+
+
+def atomic_write_json(path, payload):
+    directory = os.path.dirname(path)
+    handle, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            json.dump(payload, out)
+            out.write("\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def read_json(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
+# --------------------------------------------------------------- consent
+#
+# The broker never decides anything. It writes down what was asked, waits for
+# the person at the desktop to answer, and reports that answer. Iris polls the
+# request file while a turn is running and writes the verdict back; keeping
+# the exchange in two small files means neither side has to be alive when the
+# other starts, and a crashed broker cannot leave an approval behind.
+
+
+class Consent:
+    def __init__(self, root, timeout=CONSENT_TIMEOUT):
+        self.dir = private_dir(os.path.join(root, "consent"))
+        self.pending = os.path.join(self.dir, "pending.json")
+        self.verdict = os.path.join(self.dir, "verdict.json")
+        self.allowed = os.path.join(self.dir, "hosts.json")
+        self.timeout = timeout
+        # One question at a time. Two prompts racing for one bubble would
+        # leave the loser waiting on an answer the user never saw.
+        self.lock = threading.Lock()
+        self.counter = 0
+        self.closed = threading.Event()
+
+    def close(self):
+        self.closed.set()
+        self.clear()
+
+    def clear(self):
+        for path in (self.pending, self.verdict):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    def remembered_hosts(self):
+        saved = read_json(self.allowed)
+        return set(saved) if isinstance(saved, list) else set()
+
+    def remember_host(self, host):
+        hosts = self.remembered_hosts()
+        hosts.add(host)
+        atomic_write_json(self.allowed, sorted(hosts))
+
+    def ask(self, kind, title, detail, extra=None):
+        """Put one question on screen and block until it is answered.
+
+        Returns "allow", "always" or "deny". Every path that is not a person
+        clicking Allow — a timeout, a shutdown, a malformed verdict — is
+        "deny", because the question is asked about something irreversible.
+        """
+        with self.lock:
+            self.counter += 1
+            request_id = "%d-%d" % (int(time.time() * 1000), self.counter)
+            payload = {
+                "schemaVersion": 1,
+                "id": request_id,
+                "kind": kind,
+                "title": title,
+                "detail": detail,
+                "expiresAt": time.time() + self.timeout,
+            }
+            if extra:
+                payload.update(extra)
+            self.clear()
+            atomic_write_json(self.pending, payload)
+            deadline = time.time() + self.timeout
+            answer = "deny"
+            while time.time() < deadline and not self.closed.is_set():
+                reply = read_json(self.verdict)
+                if reply and reply.get("id") == request_id:
+                    choice = str(reply.get("verdict") or "")
+                    answer = choice if choice in ("allow", "always") else "deny"
+                    break
+                time.sleep(0.1)
+            self.clear()
+            return answer
+
+
+# ---------------------------------------------------------------- broker
+#
+# The only door out of the sandbox. Its socket is bind-mounted in; nothing
+# inside can reach the host network, the desktop, or the real work tree
+# except by asking through it, and every request it grants that has an effect
+# out here was granted by a person first.
+
+
+class Broker:
+    def __init__(self, socket_path, consent, hosts, workdir, env):
+        self.path = socket_path
+        self.consent = consent
+        self.hosts = set(hosts)
+        self.workdir = workdir
+        self.env = env
+        self.stop = threading.Event()
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server.bind(socket_path)
+        os.chmod(socket_path, 0o600)
+        self.server.listen(16)
+        self.server.settimeout(0.5)
+        self.thread = threading.Thread(target=self._accept, daemon=True)
+
+    def start(self):
+        self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        try:
+            self.server.close()
+        except OSError:
+            pass
+
+    def _accept(self):
+        while not self.stop.is_set():
+            try:
+                client, _ = self.server.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            threading.Thread(target=self._serve, args=(client,), daemon=True).start()
+
+    def _serve(self, client):
+        try:
+            request, rest = read_frame(client)
+            if not isinstance(request, dict):
+                return
+            operation = request.get("op")
+            if operation == "connect":
+                self._connect(client, request, rest)
+            elif operation == "exec":
+                self._exec(client, request)
+            else:
+                send_frame(client, {"ok": False, "error": "unsupported request"})
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                client.close()
+            except OSError:
+                pass
+
+    # -- network egress ------------------------------------------------
+    def _permit_host(self, host, port):
+        if host in self.hosts or host in self.consent.remembered_hosts():
+            return True
+        answer = self.consent.ask(
+            "host",
+            "Let the agent reach " + host + "?",
+            "Its sandbox has no other way out to the network.",
+            {"host": host, "port": port})
+        if answer == "always":
+            self.consent.remember_host(host)
+        return answer in ("allow", "always")
+
+    def _connect(self, client, request, early=b""):
+        host = str(request.get("host") or "")
+        try:
+            port = int(request.get("port") or 0)
+        except (TypeError, ValueError):
+            port = 0
+        if not HOST_RE.match(host) or not 0 < port < 65536:
+            send_frame(client, {"ok": False, "error": "bad address"})
+            return
+        if not self._permit_host(host, port):
+            send_frame(client, {"ok": False, "error": "denied"})
+            return
+        try:
+            upstream = socket.create_connection((host, port), timeout=20)
+        except OSError as error:
+            send_frame(client, {"ok": False, "error": error.strerror or "unreachable"})
+            return
+        send_frame(client, {"ok": True})
+        upstream.settimeout(None)
+        pump(client, upstream, early)
+
+    # -- commands that run out here ------------------------------------
+    def _exec(self, client, request):
+        argv = request.get("argv")
+        if (not isinstance(argv, list) or not argv
+                or not all(isinstance(part, str) for part in argv)):
+            send_frame(client, {"ok": False, "error": "bad command"})
+            return
+        printable = " ".join(argv)
+        if len(printable) > 400:
+            printable = printable[:399] + "…"
+        answer = self.consent.ask(
+            "exec",
+            "Run this on your desktop?",
+            printable,
+            {"argv": argv})
+        if answer not in ("allow", "always"):
+            send_frame(client, {"ok": False, "error": "denied", "denied": True})
+            return
+        try:
+            done = subprocess.run(
+                argv, cwd=self.workdir, env=self.env, capture_output=True,
+                text=True, timeout=EXEC_TIMEOUT)
+        except FileNotFoundError:
+            send_frame(client, {"ok": False, "error": "command not found"})
+            return
+        except subprocess.TimeoutExpired:
+            send_frame(client, {"ok": False, "error": "timed out"})
+            return
+        except OSError as error:
+            send_frame(client, {"ok": False, "error": error.strerror or "failed"})
+            return
+        send_frame(client, {
+            "ok": True,
+            "code": done.returncode,
+            "stdout": done.stdout[:EXEC_OUTPUT_MAX],
+            "stderr": done.stderr[:EXEC_OUTPUT_MAX],
+        })
+
+
+def send_frame(sock, payload):
+    sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+
+
+def read_frame(sock, limit=65536):
+    """One JSON object terminated by a newline, and whatever came after it.
+
+    A tunnelled connection turns raw the instant the frame ends, and a fast
+    peer's first bytes can arrive in the same read as the frame. Handing that
+    remainder back to the caller is what keeps the first packet of a TLS
+    handshake from being swallowed by the parser.
+    """
+    buffer = b""
+    while b"\n" not in buffer:
+        if len(buffer) > limit:
+            raise ValueError("frame too long")
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise ValueError("closed")
+        buffer += chunk
+    line, _, rest = buffer.partition(b"\n")
+    return json.loads(line.decode("utf-8")), rest
+
+
+def pump(left, right, prefix=b""):
+    """Shuttle bytes both ways until either end is done."""
+    if prefix:
+        try:
+            right.sendall(prefix)
+        except OSError:
+            prefix = b""
+    ends = [left, right]
+    try:
+        while True:
+            ready, _, bad = select.select(ends, [], ends, 60)
+            if bad:
+                return
+            if not ready:
+                continue
+            for source in ready:
+                target = right if source is left else left
+                try:
+                    data = source.recv(65536)
+                except OSError:
+                    return
+                if not data:
+                    try:
+                        target.shutdown(socket.SHUT_WR)
+                    except OSError:
+                        pass
+                    return
+                try:
+                    target.sendall(data)
+                except OSError:
+                    return
+    finally:
+        for end in ends:
+            try:
+                end.close()
+            except OSError:
+                pass
+
+
+# ---------------------------------------------------------------- sandbox
+
+
+def host_root_binds():
+    """The read-only system, and only the parts of /etc that are not secrets.
+
+    Binding all of /etc is the easy version and the wrong one: it is where a
+    machine keeps things that have nothing to do with running an agent.
+    """
+    args = ["--ro-bind", "/usr", "/usr"]
+    for link in ("/bin", "/sbin", "/lib", "/lib64"):
+        if os.path.islink(link):
+            args += ["--symlink", os.readlink(link), link]
+        elif os.path.isdir(link):
+            args += ["--ro-bind", link, link]
+    if os.path.isdir("/opt"):
+        args += ["--ro-bind", "/opt", "/opt"]
+    for path in ("/etc/ssl", "/etc/ca-certificates", "/etc/pki", "/etc/crypto-policies",
+                 "/etc/localtime", "/etc/passwd", "/etc/group", "/etc/nsswitch.conf",
+                 "/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d",
+                 "/etc/alternatives"):
+        if os.path.exists(path):
+            args += ["--ro-bind", path, path]
+    return args
+
+
+def agent_binds(program):
+    """Read-only mounts that make one CLI runnable inside an empty home.
+
+    Agents install themselves anywhere: a distribution package under /usr, a
+    npm tree under the user's home, a single downloaded binary. Only the
+    chain that actually leads to this program is bound, at its own path, so
+    the sandbox stays a sandbox rather than a copy of $HOME.
+    """
+    binds, seen = [], set()
+    home = os.path.expanduser("~")
+
+    def bind(path):
+        path = os.path.abspath(path)
+        if path in seen or not os.path.exists(path):
+            return
+        seen.add(path)
+        binds.extend(["--ro-bind", path, path])
+
+    found = shutil.which(program)
+    if not found:
+        return binds, None
+
+    # Every hop of the symlink chain, because the sandbox resolves them again
+    # from the inside and a missing hop is a missing agent.
+    hop, guard = found, 0
+    while guard < 16:
+        guard += 1
+        bind(hop)
+        if not os.path.islink(hop):
+            break
+        target = os.readlink(hop)
+        hop = target if os.path.isabs(target) else os.path.join(os.path.dirname(hop), target)
+
+    real = os.path.realpath(found)
+    # A JavaScript CLI is a file in a package directory whose dependencies sit
+    # in the node_modules tree above it, so the useful unit is that tree's
+    # parent. Anything else travels with its own directory.
+    node_modules = None
+    walk = os.path.dirname(real)
+    while walk not in ("/", ""):
+        if os.path.basename(walk) == "node_modules":
+            node_modules = walk
+        walk = os.path.dirname(walk)
+    bind(os.path.dirname(node_modules) if node_modules else os.path.dirname(real))
+
+    # A script needs whatever it names on its first line, which under a
+    # version manager is itself somewhere under $HOME.
+    try:
+        with open(real, "rb") as handle:
+            first = handle.readline(256)
+        if first.startswith(b"#!"):
+            words = first[2:].decode("utf-8", "replace").split()
+            for word in words[:2]:
+                if word.startswith("/") and os.path.exists(word):
+                    bind(word)
+                    if word.startswith(home):
+                        bind(os.path.dirname(os.path.realpath(word)))
+    except OSError:
+        pass
+    return binds, found
+
+
+def sandbox_environment(extra_path):
+    env = {
+        "HOME": SANDBOX_HOME,
+        "USER": os.environ.get("USER", "user"),
+        "LOGNAME": os.environ.get("LOGNAME", os.environ.get("USER", "user")),
+        "SHELL": "/bin/bash",
+        "TERM": os.environ.get("TERM", "dumb"),
+        "PATH": ":".join([SANDBOX_BIN] + extra_path + ["/usr/local/bin", "/usr/bin"]),
+        "TMPDIR": "/tmp",
+        # No resolver and no route: an HTTP client that ignores these simply
+        # fails, which is the correct failure.
+        "HTTP_PROXY": "http://127.0.0.1:%d" % PROXY_PORT,
+        "HTTPS_PROXY": "http://127.0.0.1:%d" % PROXY_PORT,
+        "ALL_PROXY": "http://127.0.0.1:%d" % PROXY_PORT,
+        "NO_PROXY": "",
+        # What a preamble tells the agent, the environment can confirm.
+        "IRIS_SANDBOX": "1",
+        "IRIS_BROKER": BROKER_SOCKET,
+    }
+    env["http_proxy"] = env["HTTP_PROXY"]
+    env["https_proxy"] = env["HTTPS_PROXY"]
+    env["all_proxy"] = env["ALL_PROXY"]
+    env["no_proxy"] = ""
+    for key in ENV_KEEP:
+        if key in os.environ:
+            env[key] = os.environ[key]
+    for key, value in os.environ.items():
+        if key.startswith(ENV_KEEP_PREFIX) and not ENV_DENY.search(key):
+            env[key] = value
+    return env
+
+
+def build_sandbox(state, agent, workdir, stage, run_socket, bin_dir, argv):
+    """The bwrap command line, and the environment the agent sees inside it."""
+    binds, resolved = agent_binds(argv[0])
+    if resolved is None:
+        fail("cannot find " + argv[0] + " on PATH")
+    extra_path = []
+    if os.path.dirname(resolved) not in ("/usr/bin", "/usr/local/bin"):
+        extra_path.append(os.path.dirname(resolved))
+
+    sandbox_home = private_dir(os.path.join(state, "home"))
+    env = sandbox_environment(extra_path)
+
+    args = [
+        "bwrap",
+        # No shared namespaces at all, and no way to survive the parent that
+        # is serving the broker: when Iris stops a turn, this goes with it.
+        "--unshare-all", "--die-with-parent", "--new-session",
+        "--clearenv",
+        "--proc", "/proc", "--dev", "/dev",
+        "--tmpfs", "/tmp", "--tmpfs", "/run", "--tmpfs", "/var",
+        "--dir", "/var/tmp",
+    ]
+    args += host_root_binds()
+    args += binds
+    args += ["--bind", sandbox_home, SANDBOX_HOME]
+    args += ["--ro-bind", bin_dir, SANDBOX_BIN]
+    args += ["--bind", run_socket, BROKER_SOCKET]
+
+    # The agent's own credential, read-only, one file, inside the sandbox's
+    # home rather than the user's. Its real configuration directory — with
+    # its settings and its hooks — is never mounted.
+    home = os.path.expanduser("~")
+    for source, target in CREDENTIALS.get(agent, []):
+        full = os.path.join(home, source)
+        if os.path.exists(full):
+            args += ["--ro-bind", full, os.path.join(SANDBOX_HOME, target)]
+
+    # The work directory at its own path, so every path the agent reads,
+    # writes and reports is the path the user knows — over an overlay, so
+    # none of those writes have happened yet.
+    args += [
+        "--overlay-src", workdir,
+        "--overlay", os.path.join(stage, "upper"), os.path.join(stage, "work"), workdir,
+        "--chdir", workdir,
+    ]
+    for key, value in sorted(env.items()):
+        args += ["--setenv", key, value]
+
+    inside = [
+        "/usr/bin/python3", os.path.join(SANDBOX_BIN, "iris-warden"), "supervise",
+        "--socket", BROKER_SOCKET, "--port", str(PROXY_PORT), "--",
+    ] + argv
+    return args + inside, env
+
+
+def resolve_hosts(agent, extra):
+    hosts = list(DEFAULT_HOSTS.get(agent, []))
+    for host in extra or []:
+        host = str(host).strip().lower()
+        if HOST_RE.match(host):
+            hosts.append(host)
+    return sorted(set(hosts))
+
+
+# ------------------------------------------------------- staged changes
+#
+# The overlay's upper layer is the complete record of what the agent did to
+# the work directory: a regular file is an addition or a rewrite, a character
+# device with device number zero is overlayfs's way of writing down a
+# deletion. Publishing it is the one action that makes any of it real, so it
+# is the one action that has to be consented to.
+
+
+def is_whiteout(st):
+    return stat.S_ISCHR(st.st_mode) and st.st_rdev == 0
+
+
+def scan_stage(stage, workdir):
+    upper = os.path.join(stage, "upper")
+    changes = []
+    for current, directories, files in os.walk(upper):
+        relative_dir = os.path.relpath(current, upper)
+        relative_dir = "" if relative_dir == "." else relative_dir
+        for name in sorted(directories + files):
+            full = os.path.join(current, name)
+            relative = os.path.join(relative_dir, name) if relative_dir else name
+            try:
+                st = os.lstat(full)
+            except OSError:
+                continue
+            target = os.path.join(workdir, relative)
+            if is_whiteout(st):
+                changes.append({"path": relative, "kind": "delete", "bytes": 0})
+            elif stat.S_ISDIR(st.st_mode):
+                if not os.path.isdir(target):
+                    changes.append({"path": relative, "kind": "dir", "bytes": 0})
+            elif stat.S_ISLNK(st.st_mode):
+                changes.append({"path": relative, "kind": "link", "bytes": 0})
+            elif stat.S_ISREG(st.st_mode):
+                changes.append({
+                    "path": relative,
+                    "kind": "modify" if os.path.lexists(target) else "add",
+                    "bytes": st.st_size,
+                })
+    changes.sort(key=lambda item: item["path"])
+    return changes
+
+
+def open_dir(parent_fd, name, create=False):
+    """Descend one component without ever following a symlink.
+
+    Publishing walks a tree the agent just wrote to. A symlink planted in it
+    that pointed at ~/.ssh would turn "apply the changes I reviewed" into
+    something else entirely, so every component is opened O_NOFOLLOW and a
+    component that is a link is a refusal, not a redirect.
+    """
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        return os.open(name, flags, dir_fd=parent_fd)
+    except FileNotFoundError:
+        if not create:
+            raise
+        os.mkdir(name, 0o755, dir_fd=parent_fd)
+        return os.open(name, flags, dir_fd=parent_fd)
+    except OSError as error:
+        if error.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise ValueError("refusing to follow " + name)
+        raise
+
+
+def remove_entry(dir_fd, name):
+    try:
+        st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(st.st_mode):
+        child = open_dir(dir_fd, name)
+        try:
+            for entry in os.listdir(child):
+                remove_entry(child, entry)
+        finally:
+            os.close(child)
+        os.rmdir(name, dir_fd=dir_fd)
+    else:
+        os.unlink(name, dir_fd=dir_fd)
+
+
+def publish_file(source_fd, source_name, dest_fd, dest_name, mode):
+    with open(os.open(source_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_fd),
+              "rb") as reader:
+        payload = reader.read()
+    temporary = ".iris-apply-%d-%s" % (os.getpid(), hashlib.sha256(
+        dest_name.encode("utf-8")).hexdigest()[:8])
+    try:
+        os.unlink(temporary, dir_fd=dest_fd)
+    except OSError:
+        pass
+    handle = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=dest_fd)
+    try:
+        with os.fdopen(handle, "wb") as writer:
+            writer.write(payload)
+            writer.flush()
+            os.fsync(writer.fileno())
+            # The mode goes on the descriptor, never on the name: a
+            # same-user attacker who can win a race in this directory must
+            # not get a chmod aimed at a path they chose.
+            os.fchmod(writer.fileno(), stat.S_IMODE(mode))
+        os.rename(temporary, dest_name, src_dir_fd=dest_fd, dst_dir_fd=dest_fd)
+    except BaseException:
+        try:
+            os.unlink(temporary, dir_fd=dest_fd)
+        except OSError:
+            pass
+        raise
+
+
+def publish_tree(source_fd, dest_fd, applied):
+    for name in sorted(os.listdir(source_fd)):
+        st = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+        if is_whiteout(st):
+            remove_entry(dest_fd, name)
+            applied.append("delete " + name)
+        elif stat.S_ISDIR(st.st_mode):
+            child_source = open_dir(source_fd, name)
+            try:
+                try:
+                    child_dest = open_dir(dest_fd, name, create=True)
+                except NotADirectoryError:
+                    remove_entry(dest_fd, name)
+                    child_dest = open_dir(dest_fd, name, create=True)
+                try:
+                    publish_tree(child_source, child_dest, applied)
+                finally:
+                    os.close(child_dest)
+            finally:
+                os.close(child_source)
+        elif stat.S_ISLNK(st.st_mode):
+            target = os.readlink(name, dir_fd=source_fd)
+            remove_entry(dest_fd, name)
+            os.symlink(target, name, dir_fd=dest_fd)
+            applied.append("link " + name)
+        elif stat.S_ISREG(st.st_mode):
+            publish_file(source_fd, name, dest_fd, name, st.st_mode)
+            applied.append("write " + name)
+
+
+def force_rmtree(path):
+    """Remove a tree overlayfs left behind.
+
+    The kernel's own work directory is created mode 000, and a plain removal
+    walks straight past it — which looks like a cleared stage and is a stale
+    one. These inodes are ours, so the permission is ours to restore on the
+    way down. Only the private staging tree is ever passed here.
+    """
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return
+    if stat.S_ISDIR(st.st_mode):
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            pass
+        try:
+            names = os.listdir(path)
+        except OSError:
+            names = []
+        for name in names:
+            force_rmtree(os.path.join(path, name))
+        try:
+            os.rmdir(path)
+        except OSError:
+            pass
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def clear_stage(stage):
+    upper = os.path.join(stage, "upper")
+    work = os.path.join(stage, "work")
+    for path in (upper, work):
+        if os.path.exists(path):
+            force_rmtree(path)
+        private_dir(path)
+
+
+# ------------------------------------------------- inside the sandbox
+#
+# Two small servers run on the wrong side of the boundary on purpose. They
+# hold no policy: the proxy asks the broker whether a host may be reached,
+# and iris-do asks the broker to run something. Neither can answer its own
+# question, because the answer comes from a person out here.
+
+
+def broker_socket(path=None):
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(path or os.environ.get("IRIS_BROKER") or BROKER_SOCKET)
+    return sock
+
+
+class Proxy(threading.Thread):
+    """CONNECT-only proxy on loopback: the sandbox's whole route out."""
+
+    def __init__(self, port, socket_path):
+        super().__init__(daemon=True)
+        self.socket_path = socket_path
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.listener.bind(("127.0.0.1", port))
+        self.listener.listen(32)
+
+    def run(self):
+        while True:
+            try:
+                client, _ = self.listener.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._tunnel, args=(client,), daemon=True).start()
+
+    def _tunnel(self, client):
+        try:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                if len(request) > 32768:
+                    raise ValueError("header too long")
+                chunk = client.recv(4096)
+                if not chunk:
+                    return
+                request += chunk
+            line = request.split(b"\r\n", 1)[0].decode("latin-1")
+            parts = line.split()
+            if len(parts) < 2 or parts[0].upper() != "CONNECT":
+                client.sendall(b"HTTP/1.1 405 Method Not Allowed\r\n"
+                               b"Content-Length: 0\r\n\r\n")
+                client.close()
+                return
+            host, colon, port = parts[1].rpartition(":")
+            if not colon:
+                # A CONNECT target without a port is malformed. rpartition
+                # would quietly hand the hostname over as the port number.
+                client.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+                client.close()
+                return
+            upstream = broker_socket(self.socket_path)
+            send_frame(upstream, {"op": "connect", "host": host.strip("[]"),
+                                  "port": int(port)})
+            reply, rest = read_frame(upstream)
+            if not reply.get("ok"):
+                client.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                client.close()
+                upstream.close()
+                return
+            client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            if rest:
+                client.sendall(rest)
+            pump(client, upstream)
+        except (OSError, ValueError):
+            try:
+                client.close()
+            except OSError:
+                pass
+
+
+def cmd_supervise(args):
+    """Start the loopback proxy, then be the agent."""
+    Proxy(args.port, args.socket).start()
+    running = {}
+
+    def relay_signal(number, _frame):
+        child = running.get("child")
+        if child is None:
+            raise SystemExit(128 + number)
+        try:
+            child.send_signal(number)
+        except OSError:
+            pass
+
+    # Installed before there is anything to spawn. A stop that lands in the
+    # window between Popen and signal() would otherwise kill this supervisor
+    # and orphan the agent inside the sandbox.
+    for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(number, relay_signal)
+    running["child"] = subprocess.Popen(args.argv)
+    return running["child"].wait()
+
+
+def cmd_ask(args):
+    """iris-do: submit one command to the broker and report what happened."""
+    if not args.argv:
+        fail("nothing to run")
+    try:
+        sock = broker_socket()
+        send_frame(sock, {"op": "exec", "argv": args.argv})
+        reply, _ = read_frame(sock, limit=4 * EXEC_OUTPUT_MAX)
+    except (OSError, ValueError) as error:
+        fail("the desktop broker is unreachable: %s" % error)
+    if not reply.get("ok"):
+        message = str(reply.get("error") or "refused")
+        sys.stderr.write("iris-do: " + (
+            "the user declined this command" if reply.get("denied") else message) + "\n")
+        return 77 if reply.get("denied") else 1
+    sys.stdout.write(str(reply.get("stdout") or ""))
+    sys.stderr.write(str(reply.get("stderr") or ""))
+    return int(reply.get("code") or 0)
+
+
+# ------------------------------------------------------------- outside
+
+
+def cmd_run(args):
+    root = private_dir(state_root(args.state))
+    workdir = os.path.realpath(os.path.expanduser(args.workdir or "."))
+    if args.create_workdir and not os.path.exists(workdir):
+        parent = os.path.dirname(workdir)
+        if os.path.isdir(parent):
+            try:
+                os.mkdir(workdir, 0o700)
+            except OSError:
+                pass
+    if not os.path.isdir(workdir):
+        fail("no such work directory: " + workdir)
+    home = os.path.realpath(os.path.expanduser("~"))
+    # The work directory is the one place the agent may write, and it is
+    # mounted through an overlay of itself — so it is also the one place the
+    # agent may READ that is not the read-only system. A home directory as the
+    # work directory would hand back the ssh keys, the browser profile and the
+    # keyring that the rest of this file goes to such lengths to withhold.
+    if workdir == "/" or workdir == home:
+        fail("refusing to sandbox " + workdir + ": name a work directory inside it")
+    if not args.argv:
+        fail("no agent command")
+
+    bin_dir = os.path.dirname(os.path.abspath(__file__))
+    stage = stage_for(root, workdir)
+    consent = Consent(root)
+    consent.clear()
+    session_dir = tempfile.mkdtemp(prefix="turn-", dir=runtime_root(root))
+    os.chmod(session_dir, 0o700)
+    socket_path = os.path.join(session_dir, "broker.sock")
+
+    broker = Broker(socket_path, consent, resolve_hosts(args.agent, args.allow_host),
+                    workdir, os.environ.copy())
+    broker.start()
+
+    command, _ = build_sandbox(root, args.agent, workdir, stage, socket_path,
+                               bin_dir, args.argv)
+    holder = {}
+
+    def relay_signal(number, _frame):
+        child = holder.get("child")
+        if child is None:
+            raise SystemExit(128 + number)
+        try:
+            child.send_signal(number)
+        except OSError:
+            pass
+
+    for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(number, relay_signal)
+    child = subprocess.Popen(command, env={
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin"),
+        "HOME": os.path.expanduser("~"),
+    })
+    holder["child"] = child
+
+    try:
+        code = child.wait()
+    finally:
+        broker.close()
+        consent.close()
+        shutil.rmtree(session_dir, ignore_errors=True)
+    return code
+
+
+def cmd_changes(args):
+    root = state_root(args.state)
+    workdir = os.path.realpath(os.path.expanduser(args.workdir or "."))
+    stage = os.path.join(root, "stage",
+                         hashlib.sha256(workdir.encode("utf-8")).hexdigest()[:16])
+    changes = scan_stage(stage, workdir) if os.path.isdir(stage) else []
+    json.dump({"schemaVersion": 1, "workdir": workdir, "count": len(changes),
+               "changes": changes[:200]}, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+def cmd_apply(args):
+    root = state_root(args.state)
+    workdir = os.path.realpath(os.path.expanduser(args.workdir or "."))
+    stage = os.path.join(root, "stage",
+                         hashlib.sha256(workdir.encode("utf-8")).hexdigest()[:16])
+    upper = os.path.join(stage, "upper")
+    if not os.path.isdir(upper):
+        fail("nothing staged for " + workdir)
+    applied = []
+    source_fd = os.open(upper, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    dest_fd = os.open(workdir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        publish_tree(source_fd, dest_fd, applied)
+    except ValueError as error:
+        fail(str(error))
+    finally:
+        os.close(source_fd)
+        os.close(dest_fd)
+    clear_stage(stage)
+    json.dump({"applied": len(applied), "workdir": workdir}, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+def cmd_discard(args):
+    root = state_root(args.state)
+    workdir = os.path.realpath(os.path.expanduser(args.workdir or "."))
+    stage = os.path.join(root, "stage",
+                         hashlib.sha256(workdir.encode("utf-8")).hexdigest()[:16])
+    if os.path.isdir(stage):
+        clear_stage(stage)
+    json.dump({"discarded": True, "workdir": workdir}, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+def cmd_preflight(args):
+    """Can this machine actually enforce the boundary, right now?
+
+    Iris asks before it offers an unattended order at all. A sandbox that is
+    reported as present and is not there is worse than no sandbox, so this
+    builds a real one — namespaces, overlay and all — and throws it away.
+    """
+    report = {"schemaVersion": 1, "ok": False, "bwrap": None, "reasons": []}
+    bwrap = shutil.which("bwrap")
+    report["bwrap"] = bwrap
+    if not bwrap:
+        report["reasons"].append("bubblewrap is not installed")
+        json.dump(report, sys.stdout)
+        sys.stdout.write("\n")
+        return 1
+    probe = tempfile.mkdtemp(prefix="iris-probe-")
+    try:
+        for part in ("lower", "upper", "work"):
+            os.mkdir(os.path.join(probe, part))
+        command = ["bwrap", "--unshare-all", "--die-with-parent", "--clearenv",
+                   "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]
+        command += host_root_binds()
+        command += ["--overlay-src", os.path.join(probe, "lower"),
+                    "--overlay", os.path.join(probe, "upper"),
+                    os.path.join(probe, "work"), "/mnt",
+                    "/usr/bin/touch", "/mnt/probe"]
+        done = subprocess.run(command, capture_output=True, text=True, timeout=20)
+        if done.returncode != 0:
+            report["reasons"].append(
+                (done.stderr or "bubblewrap could not build a sandbox").strip().split("\n")[-1])
+        elif not os.path.exists(os.path.join(probe, "upper", "probe")):
+            report["reasons"].append("the overlay did not stage its writes")
+        else:
+            report["ok"] = True
+    except (OSError, subprocess.SubprocessError) as error:
+        report["reasons"].append(str(error))
+    finally:
+        shutil.rmtree(probe, ignore_errors=True)
+    json.dump(report, sys.stdout)
+    sys.stdout.write("\n")
+    return 0 if report["ok"] else 1
+
+
+def main(raw):
+    parser = argparse.ArgumentParser(prog="iris-warden", description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    run = sub.add_parser("run")
+    run.add_argument("--state")
+    run.add_argument("--workdir", required=True)
+    run.add_argument("--agent", default="")
+    run.add_argument("--allow-host", action="append", default=[])
+    run.add_argument("--create-workdir", action="store_true")
+    run.add_argument("argv", nargs=argparse.REMAINDER)
+    run.set_defaults(handler=cmd_run)
+
+    supervise = sub.add_parser("supervise")
+    supervise.add_argument("--socket", default=BROKER_SOCKET)
+    supervise.add_argument("--port", type=int, default=PROXY_PORT)
+    supervise.add_argument("argv", nargs=argparse.REMAINDER)
+    supervise.set_defaults(handler=cmd_supervise)
+
+    ask = sub.add_parser("ask")
+    ask.add_argument("argv", nargs=argparse.REMAINDER)
+    ask.set_defaults(handler=cmd_ask)
+
+    for name, handler in (("changes", cmd_changes), ("apply", cmd_apply),
+                          ("discard", cmd_discard)):
+        command = sub.add_parser(name)
+        command.add_argument("--state")
+        command.add_argument("--workdir", required=True)
+        command.set_defaults(handler=handler)
+
+    preflight = sub.add_parser("preflight")
+    preflight.add_argument("--state")
+    preflight.set_defaults(handler=cmd_preflight)
+
+    args = parser.parse_args(raw)
+    if getattr(args, "argv", None) and args.argv and args.argv[0] == "--":
+        args.argv = args.argv[1:]
+    return args.handler(args)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        raise SystemExit(130)

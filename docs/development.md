@@ -9,6 +9,13 @@ one resident `service` and one `bar-widget`:
 - `keystone/Panel.qml` contains the widget's overview and settings popout.
 - `keystone/Chief.qml` is presentation and interaction only.
 - `keystone/Model.js` contains pure logic covered by Node tests.
+- `bin/iris-warden` is the sandbox and the broker: the only thing that starts
+  an unattended agent, and the only door out of it. It is plain Python 3 with
+  no dependencies, and it runs on both sides of the boundary — `run`,
+  `preflight`, `changes`, `apply` and `discard` out here; `supervise` and
+  `ask` inside, reached through the read-only `/iris/bin` mount.
+- `bin/iris-do` is the two-line shim the sandboxed agent is told to use for
+  anything that has to happen on the real desktop.
 - `keystone/Iris.js` is the orb: its wave, its states, its tempers, and the
   translation from this plugin's moods to them. A `.pragma library`, so it
   holds no QML and one copy is shared.
@@ -21,6 +28,42 @@ external — the state, the temper, where the pointer is — enters through a
 setter that carries a date. That is what makes it testable without a canvas,
 and what makes re-reading a past date give back the same picture.
 `IrisBody.qml` is its only client.
+
+## The warden
+
+The boundary is `bin/iris-warden`, and the rule it exists to enforce is
+short enough to keep in your head: **no argv this plugin builds may
+auto-approve anything outside the sandbox.** `Model.buildTalkCommand` refuses
+to produce one unless the caller states that the sandbox is what will run it,
+`Model.buildConsoleCommand` carries no such flag at all, and
+`tests/model.test.mjs` asserts both against a list of the flags rather than
+trusting a reading of the code. If you add an agent adapter, add it to that
+list too.
+
+The service never calls `buildTalkCommand` directly — `buildOrderCommand`
+wraps it, and returns null when there is no warden or no work directory. When
+`preflight` says this machine cannot build a sandbox, `runOrder` routes the
+order to the console instead of running it a weaker way; that fallback is the
+whole reason the plugin still works on a kernel without unprivileged
+namespaces.
+
+Consent is two files in `$XDG_STATE_HOME/omarchy/iris/warden/consent/`:
+the broker writes `pending.json` and blocks, the service writes
+`verdict.json`. Neither side has to be alive when the other starts, a crashed
+broker cannot leave an approval behind, and the sandbox — which has no view of
+that directory and no route to it — cannot answer its own question. The
+service polls only while a turn is running.
+
+Staged writes are the overlay's upper layer, read directly: a regular file is
+an addition or a rewrite, a character device with device number zero is
+overlayfs's whiteout for a deletion. `apply` walks it with `openat` and
+`O_NOFOLLOW` at every component and refuses a symlink rather than following
+it, because it is walking a tree the agent just wrote to.
+
+`tests/warden.test.mjs` builds real sandboxes. It skips itself when
+`preflight` says this machine cannot, which is the honest behaviour but does
+mean a green CI run on a restricted runner has not tested the boundary — check
+the preflight line the workflow prints.
 
 Keeping state in the service matters. Omarchy creates a bar widget on every
 monitor, but there must only ever be one conversation, companion, and IPC

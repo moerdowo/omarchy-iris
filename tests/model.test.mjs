@@ -121,7 +121,7 @@ test("travel plans scale with real distance and clamp", () => {
 })
 
 test("talk commands: claude adapter, others fall back", () => {
-  const fresh = M.buildTalkCommand("claude", "hi", "", "Be the chief.", "You stand on DP-1.")
+  const fresh = M.buildTalkCommand("claude", "hi", "", "Be the chief.", "You stand on DP-1.", true)
   assert.equal(fresh[0], "claude")
   assert.ok(!fresh.includes("--resume"))
   // claude carries the standing instructions as a system prompt on every
@@ -130,22 +130,21 @@ test("talk commands: claude adapter, others fall back", () => {
   assert.deepEqual(fresh.slice(fresh.indexOf("--permission-mode"), fresh.indexOf("--permission-mode") + 2),
     ["--permission-mode", "auto"])
   assert.equal(fresh[fresh.indexOf("--append-system-prompt") + 1], "Be the chief.")
-  const resumed = M.buildTalkCommand("claude", "hi", "abc-123", "Be the chief.", "You stand on DP-2.")
+  const resumed = M.buildTalkCommand("claude", "hi", "abc-123", "Be the chief.", "You stand on DP-2.", true)
   assert.ok(resumed.includes("--resume") && resumed.includes("abc-123"))
   assert.ok(resumed.indexOf("--resume") < resumed.indexOf("You stand on DP-2.\n\nOrder: hi"))
   assert.ok(resumed.includes("--append-system-prompt"))
-  assert.ok(!M.buildTalkCommand("claude", "hi", "", "").includes("--append-system-prompt"))
+  assert.ok(!M.buildTalkCommand("claude", "hi", "", "", "", true).includes("--append-system-prompt"))
   // agents without a system-prompt flag get it folded into the first order,
   // and only the first: a resumed session already heard it.
-  const oc = M.buildTalkCommand("opencode", "hi", "", "Be the chief.", "You stand on DP-1.")
+  const oc = M.buildTalkCommand("opencode", "hi", "", "Be the chief.", "You stand on DP-1.", true)
   assert.equal(oc[oc.length - 1], "Be the chief.\n\nYou stand on DP-1.\n\nOrder: hi")
-  const ocRes = M.buildTalkCommand("opencode", "hi", "ses_1", "Be the chief.", "You stand on DP-2.")
+  const ocRes = M.buildTalkCommand("opencode", "hi", "ses_1", "Be the chief.", "You stand on DP-2.", true)
   assert.equal(ocRes[ocRes.length - 1], "You stand on DP-2.\n\nOrder: hi")
-  const cx = M.buildTalkCommand("codex", "hi", "", "Be the chief.")
+  const cx = M.buildTalkCommand("codex", "hi", "", "Be the chief.", "", true)
   assert.ok(cx[cx.length - 1].startsWith("Be the chief."))
-  assert.equal(M.buildTalkCommand("crush", "hi", "", ""), null)
-  assert.deepEqual(M.buildConsoleResume("claude", "abc"),
-    ["claude", "--permission-mode", "auto", "--resume", "abc"])
+  assert.equal(M.buildTalkCommand("crush", "hi", "", "", "", true), null)
+  assert.deepEqual(M.buildConsoleResume("claude", "abc"), ["claude", "--resume", "abc"])
   assert.equal(M.buildConsoleResume("claude", ""), null)
 })
 
@@ -175,11 +174,11 @@ test("opencode adapter: real sampled lines", () => {
   assert.deepEqual(r, { kind: "session", sessionId: "ses_fd9694ca2ffeuvzR9cc5KewVK9" })
   const finalStep = M.parseTalkLine("opencode", '{"type":"step_finish","sessionID":"ses_fd9694ca2ffeuvzR9cc5KewVK9","part":{"type":"step-finish","reason":"stop"}}')
   assert.deepEqual(finalStep, r, "the process exit, not a heuristic delay, ends the turn")
-  const argv = M.buildTalkCommand("opencode", "hi", "ses_x")
+  const argv = M.buildTalkCommand("opencode", "hi", "ses_x", "", "", true)
   assert.deepEqual(argv, ["opencode", "run", "--auto", "--format", "json", "-s", "ses_x", "hi"])
   // The TUI takes --session; the note that said otherwise was wrong, and the
   // console opened empty because of it.
-  assert.deepEqual(M.buildConsoleResume("opencode", "ses_x"), ["opencode", "--auto", "--session", "ses_x"])
+  assert.deepEqual(M.buildConsoleResume("opencode", "ses_x"), ["opencode", "--session", "ses_x"])
 })
 
 test("codex adapter: real sampled lines", () => {
@@ -191,12 +190,12 @@ test("codex adapter: real sampled lines", () => {
   assert.equal(done.ok, true)
   const fail = M.parseTalkLine("codex", '{"type":"turn.failed","error":{"message":"boom"}}')
   assert.deepEqual(fail, { kind: "result", ok: false, text: "boom", sessionId: "" })
-  const fresh = M.buildTalkCommand("codex", "hi", "")
+  const fresh = M.buildTalkCommand("codex", "hi", "", "", "", true)
   assert.deepEqual(fresh, ["codex", "exec", "--approve-for-me", "--skip-git-repo-check", "--json", "hi"])
-  const res = M.buildTalkCommand("codex", "hi", "t-1")
+  const res = M.buildTalkCommand("codex", "hi", "t-1", "", "", true)
   assert.deepEqual(res,
     ["codex", "exec", "--approve-for-me", "--skip-git-repo-check", "--json", "resume", "t-1", "hi"])
-  assert.deepEqual(M.buildConsoleResume("codex", "t-1"), ["codex", "resume", "t-1", "--approve-for-me"])
+  assert.deepEqual(M.buildConsoleResume("codex", "t-1"), ["codex", "resume", "t-1"])
 })
 
 test("sleepRow routes the sleeping mood to a custom atlas row", () => {
@@ -745,16 +744,16 @@ test("interactive console commands keep the selected agent", () => {
   // intentionally retained for 4.0; Antigravity and Ori are their own agents.
   const matrix = {
     pi:       { open: ["pi"], order: ["pi", "inspect"] },
-    omp:      { open: ["omp", "--auto-approve"], order: ["omp", "--auto-approve", "--", "inspect"] },
-    opencode: { open: ["opencode", "--auto"], order: ["opencode", "--auto", "--prompt", "inspect"] },
+    omp:      { open: ["omp"], order: ["omp", "--", "inspect"] },
+    opencode: { open: ["opencode"], order: ["opencode", "--prompt", "inspect"] },
     ori:      { open: ["ori", "code"], order: ["ori", "code", "--prompt", "inspect"] },
-    claude:   { open: ["claude", "--permission-mode", "auto"], order: ["claude", "--permission-mode", "auto", "--", "inspect"] },
-    codex:    { open: ["codex", "--approve-for-me"], order: ["codex", "--approve-for-me", "--", "inspect"] },
-    grok:     { open: ["grok", "--permission-mode", "bypassPermissions"], order: ["grok", "--permission-mode", "bypassPermissions", "--", "inspect"] },
-    gemini:   { open: ["gemini", "--yolo"], order: ["gemini", "--yolo", "--prompt-interactive", "inspect"] },
-    agy:      { open: ["agy", "--dangerously-skip-permissions"], order: ["agy", "--dangerously-skip-permissions", "--prompt-interactive", "inspect"] },
-    copilot:  { open: ["copilot", "--allow-all"], order: ["copilot", "--allow-all", "--interactive", "inspect"] },
-    crush:    { open: ["crush", "--yolo"], order: ["crush", "run", "inspect"] },
+    claude:   { open: ["claude"], order: ["claude", "--", "inspect"] },
+    codex:    { open: ["codex"], order: ["codex", "--", "inspect"] },
+    grok:     { open: ["grok"], order: ["grok", "--", "inspect"] },
+    gemini:   { open: ["gemini"], order: ["gemini", "--prompt-interactive", "inspect"] },
+    agy:      { open: ["agy"], order: ["agy", "--prompt-interactive", "inspect"] },
+    copilot:  { open: ["copilot"], order: ["copilot", "--interactive", "inspect"] },
+    crush:    { open: ["crush"], order: ["crush", "run", "inspect"] },
   }
   for (const [id, command] of Object.entries(matrix)) {
     assert.deepEqual(M.buildConsoleCommand(id, ""), command.open, id + " opens interactively")
@@ -836,11 +835,11 @@ test("a runner that refuses says why, in the bubble", () => {
 })
 
 test("the console can resume every agent the bubble can talk to", () => {
-  assert.deepEqual(M.buildConsoleResume("opencode", "ses_abc"), ["opencode", "--auto", "--session", "ses_abc"])
+  assert.deepEqual(M.buildConsoleResume("opencode", "ses_abc"), ["opencode", "--session", "ses_abc"])
   assert.ok(M.buildConsoleResume("claude", "x")[0] === "claude")
   assert.ok(M.buildConsoleResume("codex", "x")[0] === "codex")
   assert.deepEqual(M.buildConsoleResume("opencode", "ses_abc", "keep going"),
-    ["opencode", "--auto", "--session", "ses_abc", "--prompt", "keep going"])
+    ["opencode", "--session", "ses_abc", "--prompt", "keep going"])
   assert.deepEqual(M.buildConsoleResume("claude", "x", "keep going").slice(-2),
     ["--", "keep going"])
   assert.deepEqual(M.buildConsoleResume("codex", "x", "keep going").slice(-2),
@@ -1136,4 +1135,111 @@ test("a shove that has begun does not change its mind", () => {
   // Latched to one side, the other side's condition is not consulted
   assert.equal(M.shoveProgress(57, 57, 350, -200, 0, W, H, size, "down").side, "down")
   assert.equal(M.shoveProgress(57, 57, 350, -200, 0, W, H, size, "left").progress, 1)
+})
+
+test("no command this plugin builds auto-approves anything outside the sandbox", () => {
+  // The invariant the whole warden rests on, asserted rather than promised.
+  // Every flag below hands an agent a standing yes; each one is legitimate
+  // inside a kernel-enforced sandbox and is a bug anywhere else.
+  const bypass = [
+    "--auto", "--yolo", "--dangerously-skip-permissions", "--allow-all",
+    "bypassPermissions", "--approve-for-me", "--auto-approve",
+    "--permission-mode", "--sandbox", "danger-full-access"
+  ]
+  const agents = ["claude", "codex", "opencode", "gemini", "agy", "copilot",
+    "crush", "grok", "omp", "ori", "pi"]
+  for (const agent of agents) {
+    for (const argv of [M.buildConsoleCommand(agent, ""),
+                        M.buildConsoleCommand(agent, "inspect"),
+                        M.buildConsoleResume(agent, "s-1"),
+                        M.buildConsoleResume(agent, "s-1", "keep going")]) {
+      if (!argv) continue
+      for (const flag of bypass)
+        assert.ok(!argv.includes(flag),
+          `${agent} console argv still carries ${flag}: ${JSON.stringify(argv)}`)
+    }
+  }
+  // And the headless adapters, which do carry them, cannot be built at all
+  // unless the caller states that the sandbox is what will run them.
+  for (const agent of ["claude", "codex", "opencode"]) {
+    assert.equal(M.buildTalkCommand(agent, "hi", "", "", ""), null)
+    assert.ok(M.buildTalkCommand(agent, "hi", "", "", "", true) !== null)
+    assert.equal(M.buildTalkCommand(agent, "hi", "", "", "", "yes"), null,
+      "only a real boolean counts as a promise")
+  }
+})
+
+test("an order is a warden command wrapped around an agent command", () => {
+  const warden = "/plugins/iris/bin/iris-warden"
+  const options = { workdir: "/home/u/Work", state: "/s/warden", agent: "claude",
+    hosts: ["Github.com", "not a host", "models.dev"] }
+  const argv = M.buildOrderCommand(warden, options, "claude", "tidy up", "", "Be the chief.", "")
+  assert.equal(argv[0], warden)
+  assert.equal(argv[1], "run")
+  assert.deepEqual(argv.slice(2, 4), ["--workdir", "/home/u/Work"])
+  assert.ok(argv.includes("--state") && argv.includes("/s/warden"))
+  // hostnames are normalised, and a bad one is dropped rather than passed on
+  assert.deepEqual(argv.filter((_, i) => argv[i - 1] === "--allow-host"),
+    ["github.com", "models.dev"])
+  const separator = argv.indexOf("--")
+  assert.ok(separator > 0 && argv[separator + 1] === "claude")
+  // no warden, no workdir, no unsandboxed agent: no order
+  assert.equal(M.buildOrderCommand("", options, "claude", "hi", "", "", ""), null)
+  assert.equal(M.buildOrderCommand(warden, { workdir: "" }, "claude", "hi", "", "", ""), null)
+  assert.equal(M.buildOrderCommand(warden, options, "crush", "hi", "", "", ""), null)
+})
+
+test("the briefing tells the agent where the walls are", () => {
+  const briefing = M.sandboxBriefing("~/Work")
+  assert.ok(briefing.includes("~/Work"))
+  assert.ok(briefing.includes("iris-do"), "the only route to the desktop is named")
+  assert.ok(briefing.includes("77"), "and the code that means the user said no")
+  assert.ok(briefing.includes("staged"))
+})
+
+test("a consent request is read defensively or not at all", () => {
+  assert.equal(M.readConsentRequest(""), null)
+  assert.equal(M.readConsentRequest("not json"), null)
+  assert.equal(M.readConsentRequest('{"id":"1"}'), null, "a request needs a known kind")
+  assert.equal(M.readConsentRequest('{"kind":"host","host":"x.com"}'), null, "and an id")
+  assert.equal(M.readConsentRequest('{"id":"1","kind":"sudo"}'), null)
+  const host = M.readConsentRequest(JSON.stringify({
+    id: "7", kind: "host", title: "Let the agent reach x.com?", detail: "d", host: "x.com" }))
+  assert.equal(host.id, "7")
+  assert.equal(host.repeatable, true, "a host is worth remembering")
+  const exec = M.readConsentRequest(JSON.stringify({
+    id: "8", kind: "exec", title: "Run this?", detail: "hyprctl dispatch exec spotify" }))
+  assert.equal(exec.repeatable, false, "a command never is")
+  assert.equal(exec.host, "")
+})
+
+test("a verdict is one of three words, and anything else is a refusal", () => {
+  assert.deepEqual(JSON.parse(M.consentVerdict("7", "allow")), { id: "7", verdict: "allow" })
+  assert.deepEqual(JSON.parse(M.consentVerdict("7", "always")), { id: "7", verdict: "always" })
+  assert.deepEqual(JSON.parse(M.consentVerdict("7", "deny")), { id: "7", verdict: "deny" })
+  for (const bogus of ["yes", "", null, undefined, "ALLOW", 1])
+    assert.equal(JSON.parse(M.consentVerdict("7", bogus)).verdict, "deny")
+})
+
+test("staged changes are counted, named, and never named as an escape", () => {
+  assert.deepEqual(M.readStagedChanges("nonsense"), { count: 0, changes: [] })
+  const staged = M.readStagedChanges(JSON.stringify({
+    count: 3,
+    changes: [{ path: "a.md", kind: "modify" }, { path: "../etc/passwd", kind: "add" },
+              { path: "notes/b.md", kind: "add" }]
+  }))
+  assert.deepEqual(staged.changes.map(c => c.path), ["a.md", "notes/b.md"])
+  assert.equal(M.describeStagedChanges(staged, "~/Work"), "3 files in ~/Work: a.md, notes/b.md, …")
+  assert.equal(M.describeStagedChanges({ count: 1, changes: [{ path: "a.md" }] }, "~/Work"),
+    "1 file in ~/Work: a.md")
+  assert.equal(M.describeStagedChanges({ count: 0, changes: [] }, "~/Work"), "")
+})
+
+test("a preflight report is a verdict about this machine, not a hope", () => {
+  assert.equal(M.readPreflight("{"), null)
+  assert.deepEqual(M.readPreflight('{"ok":true,"reasons":[]}'), { ok: true, reasons: [] })
+  const bad = M.readPreflight('{"ok":false,"reasons":["bubblewrap is not installed"]}')
+  assert.equal(bad.ok, false)
+  assert.equal(bad.reasons[0], "bubblewrap is not installed")
+  assert.equal(M.readPreflight('{"ok":"yes"}').ok, false, "only a real true is a yes")
 })

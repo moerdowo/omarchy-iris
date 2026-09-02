@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Inside Omarchy Iris's sandbox this is the only way to touch the desktop.
+#
+# The agent has no Wayland socket, no Hyprland socket and no D-Bus: a command
+# handed to iris-do is shown to the user as itself, run out here only if they
+# allow it, and its output comes back. Exit code 77 means they said no.
+set -euo pipefail
+exec python3 "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/iris-warden" ask -- "$@"

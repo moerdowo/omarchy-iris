@@ -65,6 +65,15 @@ jobs:
       # artwork builders and the live shader test start at the same instant on
       # a small runner. Serial execution is deterministic and still finishes
       # this complete suite in seconds.
+      - name: install bubblewrap so the sandbox tests can run for real
+        # A hosted runner may still refuse unprivileged user namespaces. The
+        # warden suite skips itself when that happens rather than passing by
+        # pretending, so print the verdict: a green run whose preflight says
+        # "ok": false has not tested the boundary.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          bin/iris-warden preflight || true
       - run: node --test --test-concurrency=1 tests/*.test.mjs
       # The cold-start check needs a Wayland session and the Omarchy shell,
       # so it belongs on a desktop rather than in CI: tools/coldstart-check
@@ -165,14 +174,27 @@ jobs:
         run: |
           set -euo pipefail
           for t in tools/coldstart-check tools/perform-check tools/companion-recolor \
-                   tools/build-preview; do
+                   tools/build-preview bin/iris-warden bin/iris-do; do
             [[ -x $t ]] || { echo "$t is not executable" >&2; exit 1; }
           done
           bash -n tools/coldstart-check tools/perform-check tools/companion-recolor \
-            tools/build-preview
+            tools/build-preview bin/iris-do
           python3 - <<'PY'
           import ast
           from pathlib import Path
-          for path in Path("tools").glob("*.py"):
+          for path in [*Path("tools").glob("*.py"), Path("bin/iris-warden")]:
               ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
           PY
+
+      - name: no argv outside the sandbox can auto-approve anything
+        # The invariant the plugin's whole security story rests on, checked
+        # here as text as well as in the suite: these flags may appear only in
+        # the headless adapters, which cannot be built without the sandbox,
+        # and in the tests that assert exactly that.
+        run: |
+          set -euo pipefail
+          stray=$(grep -n -- '--yolo\|--dangerously-skip-permissions\|--allow-all\|--auto-approve\|bypassPermissions' \
+            keystone/*.qml keystone/*.js || true)
+          [[ -z $stray ]] || { echo "a bypass flag reached the plugin:" >&2; echo "$stray" >&2; exit 1; }
+          grep -q 'if (sandboxed !== true) return null' keystone/Model.js \
+            || { echo "buildTalkCommand no longer refuses to build unsandboxed" >&2; exit 1; }

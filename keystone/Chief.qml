@@ -195,6 +195,21 @@ Item {
   readonly property real tintBrightness: Model.liveTintBrightness(
     { r: Color.background.r, g: Color.background.g, b: Color.background.b }, tintStrength)
 
+  // ------------------------------------------------------------- consent
+  //
+  // The one thing on this companion that is not decoration. When the warden
+  // stops the sandboxed agent at a host it may not reach, a command it may
+  // not run, or a set of edits it may not publish, the question arrives here
+  // with its exact subject in it and waits for a person. It outranks every
+  // other overlay: an unanswered question is a turn that is standing still.
+  property string consentTitle: ""
+  property string consentDetail: ""
+  property string consentAllow: "Allow"
+  property string consentDeny: "Deny"
+  property bool consentRepeatable: false
+  readonly property bool consenting: consentTitle !== ""
+  signal consentAnswered(string verdict)
+
   signal petPressed(int button)
   signal promptSubmitted(string text)
   signal promptDismissed()
@@ -1076,7 +1091,7 @@ Item {
     readonly property real desiredWidth: pet.sayMode === "think"
       ? doingMetrics.advanceWidth + Style.space(44)
       : sayMetrics.advanceWidth + Style.space(26)
-    visible: pet.onStage && !pet.promptOpen && pet.sayMode !== ""
+    visible: pet.onStage && !pet.promptOpen && !pet.consenting && pet.sayMode !== ""
     color: Color.popups.background
     borderSpec: pet.sayMode === "error"
       ? Border.flat(Color.urgent, Math.max(1, Style.normalBorderWidth))
@@ -1177,6 +1192,117 @@ Item {
       enabled: say.actionable
       cursorShape: Qt.PointingHandCursor
       onClicked: pet.sayMode === "error" ? pet.consoleRequested() : pet.bubbleDismissed()
+    }
+  }
+
+  // ---------------------------------------------------------- consent card
+
+  TextMetrics {
+    id: consentMetrics
+    text: pet.consentTitle
+    font.family: Style.font.family
+    font.pixelSize: Style.font.subtitle
+  }
+
+  BorderSurface {
+    id: consent
+    z: 6
+    visible: pet.onStage && pet.consenting
+    color: Color.popups.background
+    // A question about something irreversible does not get the same quiet
+    // outline as a reply. It is the one overlay allowed to look urgent.
+    borderSpec: Border.flat(Color.urgent, Math.max(1, Style.normalBorderWidth))
+    radius: Style.cornerRadius
+    width: Math.min(pet.overlayWidthCap,
+                    Math.max(Math.min(pet.overlayWidthCap, Style.space(120)),
+                             consentMetrics.advanceWidth + Style.space(26)))
+    height: consentContent.implicitHeight + Style.space(16)
+    x: pet.overlayX(width)
+    y: pet.overlayY(height, Style.space(6))
+
+    Accessible.role: Accessible.Dialog
+    Accessible.ignored: !visible
+    Accessible.name: pet.consentTitle
+    Accessible.description: pet.consentDetail
+
+    Column {
+      id: consentContent
+      anchors { left: parent.left; right: parent.right; top: parent.top; margins: Style.space(8) }
+      spacing: Style.space(6)
+
+      Text {
+        width: parent.width
+        text: pet.consentTitle
+        wrapMode: Text.WordWrap
+        maximumLineCount: 3
+        elide: Text.ElideRight
+        color: Color.popups.text
+        font.family: Style.font.family
+        font.pixelSize: Style.font.subtitle
+        Accessible.ignored: true
+      }
+
+      // The subject of the question, verbatim: the host, the command, the
+      // files. Consenting to a summary is not consenting.
+      Text {
+        width: parent.width
+        visible: pet.consentDetail !== ""
+        text: pet.consentDetail
+        wrapMode: Text.WrapAnywhere
+        maximumLineCount: 3
+        elide: Text.ElideRight
+        color: Qt.darker(Color.popups.text, 1.35)
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+        Accessible.ignored: true
+      }
+
+      Row {
+        id: consentButtons
+        spacing: Style.space(6)
+        readonly property int slots: pet.consentRepeatable ? 3 : 2
+        readonly property real slotWidth:
+          (consentContent.width - spacing * (slots - 1)) / slots
+
+        Repeater {
+          model: pet.consentRepeatable
+            ? [{ verdict: "deny", label: pet.consentDeny, strong: false },
+               { verdict: "allow", label: pet.consentAllow, strong: true },
+               { verdict: "always", label: "Always", strong: false }]
+            : [{ verdict: "deny", label: pet.consentDeny, strong: false },
+               { verdict: "allow", label: pet.consentAllow, strong: true }]
+
+          BorderSurface {
+            required property var modelData
+            width: consentButtons.slotWidth
+            height: consentLabel.implicitHeight + Style.space(10)
+            radius: Style.cornerRadius
+            color: modelData.strong ? Color.accent : "transparent"
+            borderSpec: modelData.strong ? Border.none()
+              : Border.flat(Qt.darker(Color.popups.text, 2.2), 1)
+
+            Accessible.role: Accessible.Button
+            Accessible.name: modelData.label
+            Accessible.onPressAction: pet.consentAnswered(modelData.verdict)
+
+            Text {
+              id: consentLabel
+              anchors.centerIn: parent
+              text: modelData.label
+              color: modelData.strong ? Color.popups.background : Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+              Accessible.ignored: true
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: pet.consentAnswered(modelData.verdict)
+            }
+          }
+        }
+      }
     }
   }
 

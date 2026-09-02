@@ -1,5 +1,59 @@
 # Changelog
 
+## 4.0.0 — 2026-09-02
+
+Breaking, and the breakage is the point: an unattended order is no longer the
+selected agent running as you with a flag telling it not to ask.
+
+### The warden
+
+- Added `bin/iris-warden`. Every bubble order — and every
+  `omarchy-shell iris order …` — now runs inside a bubblewrap sandbox: a
+  read-only system, no real `$HOME` (the agent gets one of its own under this
+  plugin's state, with its credential file bound in read-only and nothing
+  else), no Wayland, Hyprland or D-Bus socket, no SSH agent, and its own empty
+  network namespace with no resolver in it.
+- The work directory is mounted at its own path through an overlay. The agent
+  reads and writes it normally and sees its own edits; none of those writes
+  have happened. When the turn ends Iris counts them, names the files, and
+  asks. **Apply** publishes them; **Discard** throws the layer away.
+- The only route to the network is a CONNECT proxy on loopback. The agent's
+  own API is allowed; every other host stops and asks, with the hostname in
+  the question. `sandboxHosts` in settings adds standing exceptions, and
+  answering **Always** remembers one.
+- The only route to the desktop is `iris-do <command> …`, which shows you the
+  exact command and runs it out here only if you allow it. Exit code 77 means
+  you declined. The agent is told all of this at the top of every order, so it
+  works with the boundary instead of discovering it.
+- Consent is answerable from the companion, from the bar popout with a
+  keyboard, or over IPC: `omarchy-shell iris pending | allow | deny`, and
+  `omarchy-shell iris sandbox` reports the state of the whole thing.
+- If this machine cannot build that sandbox — no bubblewrap, no user
+  namespaces, no unprivileged overlayfs — an order is **not** quietly run the
+  old way. It goes to the console, and the bubble says why.
+
+### The console stopped lying
+
+- Removed every automatic-approval flag from the interactive launches:
+  `--yolo`, `--dangerously-skip-permissions`, `--allow-all`,
+  `--approve-for-me`, `--auto-approve`, `--permission-mode auto`,
+  `--permission-mode bypassPermissions` and `--auto`. They were mirrored from
+  the desktop launcher, and they meant an agent in a window you were watching
+  never actually asked you anything. Each agent now starts the way it starts
+  when you type its name, and does its own asking.
+- The headless adapters still pass such a flag, and now cannot be built at all
+  unless the caller states that the sandbox is what will run them. There is no
+  command in this plugin that auto-approves anything outside that boundary,
+  and `tests/model.test.mjs` asserts it rather than promising it.
+
+### Notes
+
+- New optional runtime dependency: `bubblewrap`. Without it the plugin still
+  runs; unattended orders route to the console instead.
+- `tests/warden.test.mjs` exercises the real thing — isolation, staging,
+  publishing, refusal — against the kernel, and skips itself on a machine that
+  cannot provide namespaces rather than passing by pretending.
+
 ## 3.0.0 — 2026-09-01
 
 Forked from [Omarchy Companion](https://github.com/moerdowo/omarchy-companion)

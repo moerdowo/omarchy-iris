@@ -117,6 +117,7 @@ Item {
     "edgeGap", "expressionChance", "expressions", "followFocus",
     "frameIntervalMs", "hideOnFullscreen", "patienceSec", "pet",
     "promptPreamble", "reduceMotion", "roam", "screen", "sessionIdleMin",
+    "sandboxHosts",
     "shell", "size", "speakMax", "talk", "temper", "theme", "themeTint",
     "tint",
     "turnTimeoutSec", "workdir"
@@ -217,7 +218,16 @@ Item {
   function scanPets() {
     if (root.pluginDir !== "" && !petScan.running) petScan.running = true
   }
-  onPluginDirChanged: if (pluginDir !== "") petScanStart.restart()
+  onPluginDirChanged: {
+    if (pluginDir === "") return
+    petScanStart.restart()
+    // The sandbox probe needs the same thing this does — knowing where this
+    // plugin was installed — so it starts from the same signal. QML allows
+    // one handler per signal; a second one further down compiles to nothing
+    // but a "property value set multiple times" and a service that never
+    // loads, which is exactly how this was found.
+    sandboxProbeStart.restart()
+  }
   Timer { id: petScanStart; interval: 0; onTriggered: root.scanPets() }
   readonly property string petScanScript:
     "import json, os, re, sys\n" +
@@ -365,15 +375,19 @@ Item {
   // it is appended rather than baked into the preamble the user may edit.
   // Without it the agent opens windows wherever focus happened to be, which
   // is regularly a screen the user is not looking at.
-  readonly property string standingOn: {
+  function runtimeContext(sandboxed) {
     if (worldMonitor === "") return ""
+    // Inside the sandbox there is no Hyprland socket, so the same advice with
+    // a bare hyprctl in it would send the agent at a wall on every order.
+    var run = sandboxed ? "iris-do hyprctl dispatch " : "hyprctl dispatch "
     var t = "Runtime context: your body is on monitor " + worldMonitor
-      + ". Before opening a new window for this request, focus it with `hyprctl dispatch "
+      + ". Before opening a new window for this request, focus it with `" + run
       + Model.luaStr(Model.dispatchFocusMonitor(worldMonitor)) + "`."
       + " Existing application windows may keep new tabs on their current monitor; say where the result appeared if that happens."
     if (cfgScreen !== "") t += " You have been kept to this monitor in your settings, so travelling elsewhere is refused: work from here."
     return t
   }
+  readonly property string standingOn: runtimeContext(false)
 
   // ------------------------------------------------------------ default agent
 
@@ -1822,8 +1836,29 @@ Item {
       return "no agent"
     }
 
+    // Unattended work happens in the warden or it does not happen. When the
+    // sandbox cannot be built, the order is not quietly downgraded to the old
+    // behaviour — it goes where a person can watch it and the agent asks for
+    // itself, and the bubble says why on the way.
+    if (root.cfgTalk && !root.sandboxReady && Model.canTalkTo(root.agentId)) {
+      root.promptOpen = false
+      root.sayMode = "say"
+      root.sayText = Model.shapeBubbleText(
+        "No sandbox here — " + (root.sandboxWhyNot !== "" ? root.sandboxWhyNot
+          : "this desktop cannot build one") + ". Taking this to the console.",
+        root.cfgSpeakMax)
+      return root.orderToConsole(t, root.worldMonitor)
+    }
+
     var argv = root.cfgTalk
-      ? Model.buildTalkCommand(root.agentId, t, root.sessionId, root.preamble, root.standingOn)
+      ? Model.buildOrderCommand(root.wardenPath, {
+          workdir: root.orderCwd(),
+          state: root.wardenState,
+          agent: root.agentId,
+          hosts: root.cfgSandboxHosts
+        }, root.agentId, t, root.sessionId,
+        root.preamble + "\n\n" + Model.sandboxBriefing(root.stagedWorkdir),
+        root.runtimeContext(true))
       : null
     if (!argv) {
       root.promptOpen = false
@@ -1862,11 +1897,239 @@ Item {
       return cfgWorkdir.indexOf("~/") === 0 ? home + cfgWorkdir.slice(1) : cfgWorkdir
     return root.hasWorkDir ? root.home + "/Work" : root.home
   }
+  // Where a sandboxed order works, which is not always where an interactive
+  // console session starts. The sandbox mounts this directory through an
+  // overlay of itself, so it is also the only place outside the read-only
+  // system that the agent can read — and a home directory here would hand
+  // back the ssh keys and the browser profile the sandbox exists to withhold.
+  // So an order never gets the home directory: it gets ~/Work, created on
+  // first use if it is not there yet.
+  function orderCwd() {
+    var path = root.talkCwd()
+    return path === root.home || path === "" ? root.home + "/Work" : path
+  }
   Process {
     id: workProbe
     running: true
     command: ["test", "-d", Quickshell.env("HOME") + "/Work"]
     onExited: function(code) { root.hasWorkDir = code === 0 }
+  }
+
+  // --------------------------------------------------------------- the warden
+  //
+  // An unattended order used to be the selected CLI, running as the user,
+  // with a flag telling it not to ask. What kept it polite was a paragraph of
+  // standing instructions, and a paragraph is not a boundary.
+  //
+  // Now every unattended order runs inside `bin/iris-warden`: a bubblewrap
+  // sandbox with a read-only system, no real home, no desktop sockets, an
+  // empty network namespace, and the work directory mounted through an
+  // overlay so its writes are staged rather than made. Three things can still
+  // leave it, and each one is a question with the exact subject in it —
+  // a host to reach, a command to run out here, a set of edits to publish.
+  // Iris asks; the person answers; nothing in the sandbox can answer for them.
+  //
+  // If the kernel or the install cannot give us that, an order does not run
+  // in a weaker way: it goes to the console, where a human sees it and the
+  // agent asks for itself.
+
+  readonly property string wardenPath: pluginDir !== "" ? pluginDir + "/bin/iris-warden" : ""
+  readonly property string wardenState: statusDir + "/warden"
+  readonly property string consentDir: wardenState + "/consent"
+  // Extra hosts this desktop's work genuinely needs. The agent's own API is
+  // already allowed; everything else interrupts, which is the point, so this
+  // exists for the person who is tired of allowing the same one.
+  readonly property var cfgSandboxHosts: {
+    var out = []
+    var list = Array.isArray(cfg.sandboxHosts) ? cfg.sandboxHosts : []
+    for (var i = 0; i < list.length && out.length < 32; i++) {
+      var host = String(list[i] || "").trim().toLowerCase()
+      if (/^[a-z0-9]([a-z0-9.-]{0,252}[a-z0-9])?$/.test(host)) out.push(host)
+    }
+    return out
+  }
+
+  property bool sandboxProbed: false
+  property bool sandboxReady: false
+  property string sandboxWhyNot: ""
+  readonly property bool canOrderUnattended: sandboxReady && cfgTalk && Model.canTalkTo(agentId)
+
+  Process {
+    id: sandboxProbe
+    running: false
+    command: root.wardenPath === "" ? ["true"]
+      : [root.wardenPath, "preflight", "--state", root.wardenState]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var report = Model.readPreflight(text)
+        root.sandboxProbed = true
+        root.sandboxReady = report !== null && report.ok
+        root.sandboxWhyNot = root.sandboxReady ? ""
+          : report && report.reasons.length > 0 ? report.reasons[0]
+          : "this desktop cannot build the sandbox"
+      }
+    }
+    onExited: function(code) {
+      // A warden that will not even start is the same answer as a failed
+      // probe, and has to reach the same place rather than leaving the
+      // service waiting for a report that is not coming.
+      if (!root.sandboxProbed) {
+        root.sandboxProbed = true
+        root.sandboxReady = false
+        if (root.sandboxWhyNot === "")
+          root.sandboxWhyNot = "the sandbox helper did not run"
+      }
+    }
+  }
+  Timer {
+    id: sandboxProbeStart
+    interval: 0
+    onTriggered: if (root.wardenPath !== "" && !sandboxProbe.running) sandboxProbe.running = true
+  }
+
+  // ---------------------------------------------------------------- consent
+  //
+  // The broker writes one question at a time and waits; this reads it, shows
+  // it, and writes back exactly one answer. Polling only while a turn is
+  // running keeps an idle desktop idle, and a question that outlives its turn
+  // dies with the broker rather than lingering over a companion doing nothing.
+
+  property var consentRequest: null
+  property var reviewRequest: null
+  readonly property var activeConsent: consentRequest !== null ? consentRequest : reviewRequest
+
+  FileView {
+    id: consentPending
+    path: root.consentDir + "/pending.json"
+    printErrors: false
+    onLoaded: root.noteConsent(String(text() || ""))
+    onLoadFailed: root.noteConsent("")
+  }
+  FileView {
+    id: consentReply
+    path: root.consentDir + "/verdict.json"
+    atomicWrites: true
+    printErrors: false
+    onSaved: root.protectStateFile(path)
+  }
+  Timer {
+    id: consentPoll
+    interval: 250
+    repeat: true
+    running: root.talkBusy
+    onTriggered: consentPending.reload()
+    onRunningChanged: if (!running) root.consentRequest = null
+  }
+
+  function noteConsent(payload) {
+    var next = Model.readConsentRequest(payload)
+    if (next === null) {
+      if (root.consentRequest !== null) root.consentRequest = null
+      return
+    }
+    if (root.consentRequest !== null && root.consentRequest.id === next.id) return
+    root.consentRequest = next
+    // The order form owns keyboard focus and sits exactly where the card
+    // does. A question that arrives behind it is a question nobody answers.
+    root.promptOpen = false
+    statusWrite.restart()
+  }
+
+  // "allow", "always" or "deny". Anything else, including the turn ending
+  // under the question, is a refusal on the broker's side after its timeout.
+  function answerConsent(verdict) {
+    if (root.consentRequest === null) return false
+    consentReply.setText(Model.consentVerdict(root.consentRequest.id, verdict))
+    root.consentRequest = null
+    return true
+  }
+
+  // ------------------------------------------------------- staged changes
+  //
+  // The overlay means the agent's edits exist without having happened. This
+  // is where they are counted, shown, and then either made real or thrown
+  // away — the last of the three consequential actions, and the only one that
+  // is asked after the fact rather than during, because the agent has to be
+  // finished before there is anything to show.
+
+  property var stagedChanges: null
+  readonly property string stagedWorkdir: {
+    var path = root.orderCwd()
+    return path.indexOf(root.home + "/") === 0 ? "~" + path.slice(root.home.length) : path
+  }
+
+  Process {
+    id: changesProbe
+    running: false
+    command: root.wardenPath === "" ? ["true"]
+      : [root.wardenPath, "changes", "--state", root.wardenState, "--workdir", root.orderCwd()]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.noteStagedChanges(text)
+    }
+  }
+  // The command is assigned rather than bound: this one runs at the moment a
+  // person answers, and a binding that re-evaluates between the verb and the
+  // start would publish when they said discard.
+  Process {
+    id: stageAction
+    property string verb: ""
+    running: false
+    onExited: function(code) {
+      root.stagedChanges = null
+      root.reviewRequest = null
+      root.sayMode = code === 0 ? "say" : "error"
+      root.sayText = code !== 0 ? "Those changes could not be published."
+        : stageAction.verb === "apply" ? "Applied." : "Discarded."
+      statusWrite.restart()
+    }
+  }
+
+  function noteStagedChanges(payload) {
+    var staged = Model.readStagedChanges(payload)
+    root.stagedChanges = staged
+    if (staged.count <= 0) {
+      root.reviewRequest = null
+      statusWrite.restart()
+      return
+    }
+    // The agent's own last words make the best title for this: it is the
+    // sentence that says what the changes were for.
+    var headline = root.sayMode === "say" && root.sayText !== "" ? root.sayText
+      : "Iris staged changes in " + root.stagedWorkdir + "."
+    root.promptOpen = false
+    root.reviewRequest = {
+      id: "review",
+      kind: "apply",
+      title: Model.shapeBubbleText(headline, 160),
+      detail: Model.describeStagedChanges(staged, root.stagedWorkdir),
+      repeatable: false
+    }
+    statusWrite.restart()
+  }
+
+  function reviewStagedChanges() {
+    if (root.wardenPath === "" || changesProbe.running) return
+    changesProbe.running = true
+  }
+
+  function resolveReview(publish) {
+    if (root.reviewRequest === null || stageAction.running) return false
+    if (root.wardenPath === "") return false
+    stageAction.verb = publish ? "apply" : "discard"
+    stageAction.command = [root.wardenPath, stageAction.verb,
+      "--state", root.wardenState, "--workdir", root.orderCwd()]
+    stageAction.running = true
+    return true
+  }
+
+  // One answer, whichever question is on screen. The card cannot tell them
+  // apart and should not have to.
+  function answerActiveConsent(verdict) {
+    if (root.consentRequest !== null) return root.answerConsent(verdict)
+    if (root.reviewRequest !== null) return root.resolveReview(verdict !== "deny")
+    return false
   }
 
   Process {
@@ -1915,6 +2178,10 @@ Item {
         }
       }
       root.releaseTurn()
+      // Whatever the turn did — answered, failed, timed out, was stopped —
+      // it may have written into the overlay first, and those writes are
+      // nobody's until somebody says so.
+      root.reviewStagedChanges()
     }
 
     stderr: SplitParser {
@@ -2369,6 +2636,11 @@ Item {
       error: sayMode === "error" ? sayText.slice(0, 400) : "",
       consoleOpen: consoleOpen,
       sessionActive: sessionId !== "",
+      sandbox: sandboxProbed ? (sandboxReady ? "enforced" : "unavailable") : "checking",
+      sandboxNote: sandboxWhyNot.slice(0, 200),
+      consentKind: activeConsent ? String(activeConsent.kind) : "",
+      consentDetail: activeConsent ? String(activeConsent.detail).slice(0, 200) : "",
+      stagedChanges: stagedChanges ? Number(stagedChanges.count) : 0,
       pet: spritePetId !== "" ? spritePetId : cfgPet,
       shell: irisPet ? cfgShell : "",
       tint: irisPet ? cfgTint : "",
@@ -2642,6 +2914,38 @@ Item {
     function ask(): void { root.askOn("") }
     function order(text: string): string { root.shown = true; return root.runOrder(text) }
     function stop(): string { return root.stopOrder() ? "stopping" : "nothing is running" }
+
+    // The three consequential actions are answerable from a keyboard too. An
+    // IPC call is the user typing a command, which is as explicit as a click;
+    // what neither this nor the card can do is answer a question nobody has
+    // been asked, so both refuse when nothing is pending.
+    function allow(): string {
+      if (root.activeConsent === null) return "nothing is waiting"
+      var what = String(root.activeConsent.kind)
+      return root.answerActiveConsent("allow")
+        ? (what === "apply" ? "publishing the staged changes" : "allowed") : "could not answer"
+    }
+
+    function deny(): string {
+      if (root.activeConsent === null) return "nothing is waiting"
+      var what = String(root.activeConsent.kind)
+      return root.answerActiveConsent("deny")
+        ? (what === "apply" ? "discarded" : "denied") : "could not answer"
+    }
+
+    function pending(): string {
+      if (root.activeConsent === null) return "nothing is waiting"
+      return String(root.activeConsent.title) + " " + String(root.activeConsent.detail)
+    }
+
+    function sandbox(): string {
+      if (!root.sandboxProbed) return "still checking"
+      if (!root.sandboxReady) return "unavailable: " + root.sandboxWhyNot
+      var staged = root.stagedChanges ? Number(root.stagedChanges.count) : 0
+      return "enforced; " + (staged > 0
+        ? String(staged) + " staged change" + (staged === 1 ? "" : "s") + " awaiting review"
+        : "nothing staged")
+    }
     function travel(monitor: string): string { return root.travelTo(monitor) }
 
     function screen(name: string): string {
@@ -2915,6 +3219,11 @@ Item {
           initialPx: root.spawnLocalX >= 0 ? root.spawnLocalX : root.effectiveHomeX
           sayMode: root.sayMode
           sayText: root.sayText
+          consentTitle: root.activeConsent ? String(root.activeConsent.title) : ""
+          consentDetail: root.activeConsent ? String(root.activeConsent.detail) : ""
+          consentRepeatable: root.activeConsent ? root.activeConsent.repeatable === true : false
+          consentAllow: root.activeConsent && root.activeConsent.kind === "apply" ? "Apply" : "Allow"
+          consentDeny: root.activeConsent && root.activeConsent.kind === "apply" ? "Discard" : "Deny"
           spriteOk: root.spriteOk
           spriteSource: root.spriteSource
           spriteRows: root.spriteRows
@@ -2937,6 +3246,10 @@ Item {
             root.tucked = true
           }
           onPetPressed: function(button) {
+            // A pending question owns the creature until it is answered.
+            // Poking it must not open a form over the card, and must not be
+            // mistaken for an answer either.
+            if (root.activeConsent !== null) return
             if (button === Qt.RightButton) root.summonConsole()
             else if (button === Qt.LeftButton) {
               // A running order owns the bubble and the interaction slot.
@@ -2955,6 +3268,7 @@ Item {
               root.promptOpen = hadBubble ? false : !root.promptOpen
             }
           }
+          onConsentAnswered: function(verdict) { root.answerActiveConsent(verdict) }
           onPromptSubmitted: function(text) { root.runOrder(text) }
           onPromptDismissed: root.promptOpen = false
           onBubbleDismissed: root.dismissBubble()

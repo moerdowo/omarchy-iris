@@ -41,6 +41,10 @@ none of its state.
 - **Runtime:** Omarchy 4, including its Quickshell/Hyprland integration,
   `bash`, `python3`, `jq`, and the regular `omarchy-*` helpers. Omarchy Iris installs no
   system package, daemon, hook, or background unit of its own.
+- **Unattended orders:** `bubblewrap` (`sudo pacman -S bubblewrap`), plus a
+  kernel with unprivileged user namespaces and unprivileged overlayfs — both
+  are on by default on Arch and Omarchy. Without them the companion still
+  works and orders go to the console instead. See [The sandbox](#the-sandbox).
 - **Orders:** an agent CLI already discovered and configured by Omarchy. Claude,
   Codex, and OpenCode support bubble conversations; other Omarchy agents open
   in the native console scratchpad. The companion and its non-agent controls remain usable
@@ -104,19 +108,87 @@ order is refused instead of replacing it, and **Stop** ends that exact turn.
 Timeout, cancellation, and process exit are terminal states; an old cleanup
 callback cannot affect a later request.
 
-Be clear about the trust boundary: a bubble order runs the selected agent
-headlessly and unattended. Depending on the agent and CLI version, its adapter
-may grant automatic approval or bypass an approval or sandbox boundary. The
-standing instructions tell it to avoid irreversible work unless explicitly
-ordered, but instructions are not a sandbox.
-
 The console is Omarchy's native scratchpad, including its Quake treatment when
 the installed Omarchy provides it. It makes the work visible, interactive, and
-steerable. It does **not** make the agent sandboxed or promise per-tool
-confirmation. Omarchy Iris follows Omarchy's launcher when it follows the desktop
-default; an explicitly selected or resumed agent uses that CLI's compatible
-interactive launch mode. Treat both paths as having the filesystem and network
-reach of the selected CLI.
+steerable, and it is launched with no approval flags at all: each agent starts
+the way it starts when you type its name, and asks you for itself.
+
+## The sandbox
+
+An unattended order is a sentence typed into a bar widget. It used to become
+the selected CLI running as you, with a flag telling it not to ask, held in
+check by a paragraph of standing instructions. A paragraph is not a boundary,
+so there is one now.
+
+Every bubble order — and every `omarchy-shell iris order …` — runs inside
+`bin/iris-warden`, a bubblewrap sandbox:
+
+- **Filesystem.** A read-only system and no real `$HOME`. The agent gets a
+  home of its own under this plugin's state directory, with its credential
+  file bound in read-only and nothing else: not your SSH keys, not your
+  keyring, not your browser profile, not its own settings or hooks.
+- **The work directory** is mounted at its own path through an overlay. The
+  agent reads and writes it normally and sees its own edits. None of those
+  writes have happened.
+- **Network.** Its own empty network namespace, with no resolver in it. The
+  only way out is a CONNECT proxy on loopback.
+- **The desktop.** No Wayland socket, no Hyprland socket, no D-Bus, no SSH
+  agent.
+
+Three things can still leave that sandbox, and each one is a question with its
+exact subject in it:
+
+| It wants to | You see | You answer |
+| --- | --- | --- |
+| reach a host that is not its own API | the hostname | Allow · Always · Deny |
+| run a command out here | the exact command line | Allow · Deny |
+| publish what it wrote | the file count and names | Apply · Discard |
+
+Answer on the companion, in the bar popout with a keyboard, or over IPC:
+
+```
+omarchy-shell iris pending     # what is being asked, if anything
+omarchy-shell iris allow
+omarchy-shell iris deny
+omarchy-shell iris sandbox     # enforced, or why not
+```
+
+Nothing inside can answer for you: the questions are asked on the other side
+of a socket by a process the sandbox cannot reach.
+
+The agent is told all of this at the top of every order, and desktop control
+is given to it as one command — `iris-do hyprctl dispatch …`,
+`iris-do omarchy theme set …` — so it works with the boundary rather than
+spending your turn discovering it. Exit code 77 means you said no.
+
+`sandboxHosts` in this plugin's settings adds standing exceptions to the
+network allowlist, for the host you are tired of allowing:
+
+```json
+{ "id": "io.github.moerdowo.omarchyiris", "sandboxHosts": ["github.com"] }
+```
+
+**Requirements and honest limits.** This needs `bubblewrap`, unprivileged user
+namespaces, and unprivileged overlayfs. Iris checks by building a real sandbox
+at startup, not by looking for the binary. If it cannot, an unattended order
+is **not** quietly run the old way — it goes to the console, where you can see
+it and the agent asks for itself, and the bubble tells you why.
+
+**Authentication.** The sandbox binds in the one credential file the selected
+agent needs, read-only: `~/.claude/.credentials.json`, `~/.codex/auth.json`, or
+OpenCode's `auth.json`. An agent that keeps its credential in the system
+keyring instead cannot reach it from in there — the keyring is one of the
+things being withheld — and will report itself as signed out. Use file-based
+authentication for the agent you point Iris at, or send those orders to the
+console.
+
+What this does not claim: it is a boundary around what an agent can *reach*,
+not a guarantee about what it will *do* with the API access, work directory
+and consented actions you give it. The agent still holds its own credential.
+A command you approve runs with your own reach, so read it. And an agent CLI
+installed somewhere Iris cannot bind read-only — under some version managers,
+for instance — will simply fail to start inside the sandbox rather than
+running outside it.
 
 Omarchy Iris does not install agent hooks and does not edit another application's
 settings. It may passively read an existing OmaPets-compatible status record
@@ -235,6 +307,10 @@ and a themeable hue range. The complete schema is in
 omarchy-shell iris ask
 omarchy-shell iris order "open my calendar"
 omarchy-shell iris stop
+omarchy-shell iris sandbox
+omarchy-shell iris pending
+omarchy-shell iris allow
+omarchy-shell iris deny
 omarchy-shell iris summon
 omarchy-shell iris fresh
 omarchy-shell iris travel DP-2

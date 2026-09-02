@@ -464,6 +464,18 @@ ShellRoot {
         }
         console.log("COLDSTART migration: top-only -> right bar entry")
         console.log("COLDSTART architecture: service + bar-widget")
+        // The sandbox is checked by building one, so a real shell has to
+        // reach a verdict about this machine before the plugin will take an
+        // unattended order at all. Either answer is a pass here; no answer
+        // means the probe never ran, and every order would silently route to
+        // the console for the rest of the session.
+        if (!service.sandboxProbed) {
+          root.fail("the sandbox preflight never reported")
+          return
+        }
+        console.log("COLDSTART warden: "
+          + (service.sandboxReady ? "sandbox enforced"
+             : "unavailable (" + service.sandboxWhyNot + ")"))
         root.phase = 8
         quitSoon.restart()
       }
@@ -538,6 +550,8 @@ if [[ -n $relevant_warnings ]]; then
   exit 1
 fi
 
+printf '%s\n' "$out" | grep -q 'COLDSTART warden: ' \
+  || { echo "coldstart-check: the sandbox preflight never reported" >&2; exit 1; }
 printf '%s\n' "$out" | grep -q 'COLDSTART body: sprite pet: probe source: planted' \
   || { echo "coldstart-check: the planted spritesheet pet never became ready" >&2; exit 1; }
 printf '%s\n' "$out" | grep -q 'COLDSTART body: drawn pet: iris source: bundled' \

@@ -56,6 +56,14 @@ Panel {
   readonly property bool hasFaces: drawnPet || (ready && Model.glanceFaces(
     service.spriteFaces, service.spriteIdleFaces, service.spriteRows, service.spriteColumns).length > 0)
   readonly property bool canBubble: ready && hasAgent && Model.canTalkTo(agentId)
+  // The warden's question, if it is asking one. It outranks everything else
+  // this panel has to say: a turn is standing still until it is answered, and
+  // a keyboard user must be able to answer it from here rather than having to
+  // find the creature with a mouse.
+  readonly property var consent: ready && service.activeConsent ? service.activeConsent : null
+  readonly property bool consentIsReview: consent !== null && String(consent.kind) === "apply"
+  readonly property bool sandboxChecked: ready && service.sandboxProbed === true
+  readonly property bool sandboxOn: ready && service.sandboxReady === true
   readonly property bool canWalk: ready && service.stillPet !== true
   readonly property bool canTheme: ready && service.spriteThemeable !== null
   // One authority decides whether a performance can begin. Mirroring the
@@ -72,6 +80,7 @@ Panel {
   property string focusId: "primary"
   property bool cursorActive: false
   property int quickCursor: 0
+  property int consentCursor: 0
   // Utility actions can appear and disappear while this panel is open.
   // Remember the action, not its position, so inserting Play before Fresh
   // never turns the next Enter press into a different command.
@@ -250,6 +259,7 @@ Panel {
 
   function contextTitle() {
     if (!ready) return "Starting Omarchy Iris"
+    if (consent !== null) return String(consent.title)
     if (!hasAgent) return "Choose an agent to take orders"
     if (mood === "error") return "The agent could not finish"
     if (service.agentSilent === true) return "Still working"
@@ -260,6 +270,15 @@ Panel {
 
   function contextBody() {
     if (!ready) return "The desktop service is loading."
+    if (consent !== null) {
+      var subject = String(consent.detail)
+      return consentIsReview
+        ? subject + "\n\nThe agent wrote these into a staging layer. Nothing has changed on disk yet."
+        : subject + "\n\nThe sandbox cannot do this by itself. Nothing happens unless you allow it."
+    }
+    if (sandboxChecked && !sandboxOn && canBubble)
+      return "Unattended orders go to the console here: " + String(service.sandboxWhyNot || "no sandbox")
+        + ". The agent asks for itself there."
     if (!hasAgent) return "Pick Omarchy's default agent, then ask from here or the creature."
     if (mood === "error") return String(service.sayText || "The agent could not finish this turn.")
     if (service.agentSilent === true) return "This turn is taking longer than usual. You can stop it safely."
@@ -314,6 +333,14 @@ Panel {
       if (typeof service.stopOrder === "function") service.stopOrder()
     } else if (!hasAgent) root.pickDesktopAgent()
     else root.askHere()
+  }
+
+  // Deliberately not "dismiss". There is no way to make the question go away
+  // without answering it, because the thing on the other side is waiting.
+  function answerConsent(allow) {
+    if (!service || consent === null) return
+    if (typeof service.answerActiveConsent === "function")
+      service.answerActiveConsent(allow ? "allow" : "deny")
   }
 
   function consoleHere() {
@@ -372,6 +399,7 @@ Panel {
   function navIds() {
     if (view === "overview") {
       var overview = ["settings"]
+      if (consent !== null) overview.push("consent")
       if (showPrimaryAction) overview.push("primary")
       overview.push("quick")
       if (hasActivities || inConversation) overview.push("utility")
@@ -407,6 +435,7 @@ Panel {
       case "settings": return overviewHero
       case "back": return settingsHero
       case "primary": return primaryButton
+      case "consent": return consentCursor === 0 ? consentAllowButton : consentDenyButton
       case "quick": return quickCursor === 0 ? consoleButton : tuckButton
       case "utility": {
         var action = currentUtilityAction()
@@ -458,7 +487,8 @@ Panel {
   }
 
   function syncGroupCursor() {
-    if (focusId === "quick") quickCursor = Math.max(0, Math.min(1, quickCursor))
+    if (focusId === "consent") consentCursor = Math.max(0, Math.min(1, consentCursor))
+    else if (focusId === "quick") quickCursor = Math.max(0, Math.min(1, quickCursor))
     else if (focusId === "utility") syncUtilityAction()
     else if (focusId === "conversation")
       conversationCursor = optionIndex(conversationOptions, String(service.cfgSessionIdleMin))
@@ -481,7 +511,8 @@ Panel {
     cursorActive = true
     focusId = id
     if (groupIndex !== undefined) {
-      if (id === "quick") quickCursor = groupIndex
+      if (id === "consent") consentCursor = groupIndex
+      else if (id === "quick") quickCursor = groupIndex
       else if (id === "utility") {
         var actions = utilityActions()
         if (typeof groupIndex === "string" && actions.indexOf(groupIndex) >= 0)
@@ -523,7 +554,8 @@ Panel {
 
   function moveHorizontal(delta) {
     if (revealCursor()) return
-    if (focusId === "quick") quickCursor = Math.max(0, Math.min(1, quickCursor + delta))
+    if (focusId === "consent") consentCursor = Math.max(0, Math.min(1, consentCursor + delta))
+    else if (focusId === "quick") quickCursor = Math.max(0, Math.min(1, quickCursor + delta))
     else if (focusId === "utility") {
       var actions = utilityActions()
       var here = actions.indexOf(currentUtilityAction())
@@ -540,6 +572,7 @@ Panel {
       case "settings": showView("settings"); break
       case "back": showView("overview"); break
       case "primary": primaryAction(); break
+      case "consent": answerConsent(consentCursor === 0); break
       case "quick":
         if (quickCursor === 0) consoleHere()
         else setTucked(!tucked)
@@ -736,6 +769,47 @@ Panel {
                   maximumLineCount: 4
                   elide: Text.ElideRight
                 }
+              }
+            }
+
+            // Two buttons, both explicit, neither of them a default. The
+            // urgent one is the refusal, because the cheap answer to a
+            // question about something irreversible should be no.
+            Row {
+              width: parent.width
+              visible: root.consent !== null
+              spacing: Style.spacing.md
+
+              readonly property real cellWidth: (width - spacing) / 2
+
+              Button {
+                id: consentAllowButton
+                width: parent.cellWidth
+                text: root.consentIsReview ? "Apply" : "Allow"
+                iconText: root.consentIsReview ? "󰆓" : "󰄬"
+                bordered: true
+                enabled: root.ready
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.bodySmall
+                hasCursor: root.cursorActive && root.focusId === "consent" && root.consentCursor === 0
+                onHovered: function(on) { if (on) root.setCursor("consent", consentAllowButton, 0) }
+                onClicked: root.answerConsent(true)
+              }
+
+              Button {
+                id: consentDenyButton
+                width: parent.cellWidth
+                text: root.consentIsReview ? "Discard" : "Deny"
+                iconText: "󰅖"
+                bordered: true
+                enabled: root.ready
+                foreground: root.urgent
+                fontFamily: root.fontFamily
+                fontSize: Style.font.bodySmall
+                hasCursor: root.cursorActive && root.focusId === "consent" && root.consentCursor === 1
+                onHovered: function(on) { if (on) root.setCursor("consent", consentDenyButton, 1) }
+                onClicked: root.answerConsent(false)
               }
             }
 

@@ -421,7 +421,7 @@ function travelPlan(segments, fromName, fromLocalX, toName, toLocalFrac) {
 // work — an order opens the console with them — but the speech bubble
 // needs a runner that streams its answer out in a shape we can read.
 function canTalkTo(agent) {
-  return buildTalkCommand(String(agent || ""), "x", null) !== null
+  return buildTalkCommand(String(agent || ""), "x", null, "", "", true) !== null
 }
 
 // The standing instructions ride differently per agent. Claude takes them as
@@ -430,7 +430,18 @@ function canTalkTo(agent) {
 // the same conversation at full length instead of in bubble-sized clips. The
 // other two have no such flag, so there the first order of a session carries
 // them inline, once.
-function buildTalkCommand(agent, order, sessionId, preamble, runtimeContext) {
+//
+// Every adapter below hands its agent a flag that stops it asking: an
+// unattended run has no terminal to answer with. Those flags are safe in
+// exactly one place — inside the warden's sandbox, where the agent has no
+// real home, no desktop socket, no route to the network and an overlay
+// instead of the work directory, and where the things that do leave are
+// consented to one at a time. So this refuses to build a command at all
+// unless the caller has told it the sandbox is what will run it. There is no
+// argv in this plugin that auto-approves anything outside that boundary, and
+// that is a property you can grep for.
+function buildTalkCommand(agent, order, sessionId, preamble, runtimeContext, sandboxed) {
+  if (sandboxed !== true) return null
   var lead = String(preamble || "")
   var context = String(runtimeContext || "")
   var request = context === "" ? order : context + "\n\nOrder: " + order
@@ -462,6 +473,140 @@ function buildTalkCommand(agent, order, sessionId, preamble, runtimeContext) {
     return cx
   }
   return null
+}
+
+// ------------------------------------------------------------ the warden
+//
+// Nothing above ever runs on its own. `bin/iris-warden` puts the agent in a
+// bubblewrap sandbox — read-only system, no real $HOME, the work directory
+// mounted through an overlay so its writes are staged, its own empty network
+// namespace whose only exit is a proxy that knows an allowlist — and serves
+// the broker that the three escaping actions have to pass through. This side
+// only assembles the command and reads what comes back.
+
+function buildWardenCommand(warden, options, argv) {
+  var path = String(warden || "")
+  if (path === "" || !Array.isArray(argv) || argv.length === 0) return null
+  var opts = options && typeof options === "object" ? options : ({})
+  var cwd = String(opts.workdir || "")
+  if (cwd === "") return null
+  var command = [path, "run", "--workdir", cwd, "--create-workdir"]
+  if (opts.state) command.push("--state", String(opts.state))
+  if (opts.agent) command.push("--agent", String(opts.agent))
+  var hosts = Array.isArray(opts.hosts) ? opts.hosts : []
+  for (var i = 0; i < hosts.length; i++) {
+    var host = String(hosts[i] || "").trim().toLowerCase()
+    if (/^[a-z0-9]([a-z0-9.-]{0,252}[a-z0-9])?$/.test(host))
+      command.push("--allow-host", host)
+  }
+  command.push("--")
+  return command.concat(argv)
+}
+
+// The one order-building entry point the service is allowed to use. An order
+// that cannot be sandboxed is not run in a weaker way; it is not run.
+function buildOrderCommand(warden, options, agent, order, sessionId, preamble, runtimeContext) {
+  var inner = buildTalkCommand(agent, order, sessionId, preamble, runtimeContext, true)
+  if (!inner) return null
+  return buildWardenCommand(warden, options, inner)
+}
+
+// What the agent is told about the room it is in. Without this it spends the
+// turn discovering the walls: reporting that hyprctl is missing, that it
+// cannot resolve a host, that its edits do not appear to be saved.
+function sandboxBriefing(workdir) {
+  var where = String(workdir || "your work directory")
+  return "You are running inside Omarchy Iris's sandbox. It is not a"
+    + " formality, and you cannot turn it off.\n"
+    + "- Your only writable place is " + where + ", and your writes there are"
+    + " staged: they are shown to the user afterwards and become real only"
+    + " when the user approves them. Work normally; do not try to verify"
+    + " your edits from outside.\n"
+    + "- There is no home directory, no browser, no keyring, no SSH agent and"
+    + " no D-Bus. Do not look for them.\n"
+    + "- The network reaches your own API and nothing else. Another host"
+    + " interrupts the user for permission, so do not fetch one casually.\n"
+    + "- The desktop is not yours to touch directly: hyprctl, omarchy,"
+    + " omarchy-shell, notify-send, xdg-open and anything else out there run"
+    + " only through `iris-do <command> [args...]`, which shows the user the"
+    + " exact command and runs it only if they allow it. Exit code 77 means"
+    + " they declined; accept that answer and say so rather than looking for"
+    + " another route.\n"
+    + "- Ask for one consequential thing at a time. Every prompt is a person"
+    + " being interrupted."
+}
+
+function readPreflight(text) {
+  var report = null
+  try { report = JSON.parse(String(text || "")) } catch (e) { return null }
+  if (!report || typeof report !== "object") return null
+  return {
+    ok: report.ok === true,
+    reasons: Array.isArray(report.reasons) ? report.reasons.map(String) : []
+  }
+}
+
+// A consent request is written by a process on the other side of a socket, so
+// nothing in it is trusted as a shape: every field is read defensively and a
+// request that does not parse is no request at all.
+function readConsentRequest(text) {
+  var raw = null
+  try { raw = JSON.parse(String(text || "")) } catch (e) { return null }
+  if (!raw || typeof raw !== "object") return null
+  var id = String(raw.id || "")
+  var kind = String(raw.kind || "")
+  if (id === "" || (kind !== "host" && kind !== "exec")) return null
+  var expires = Number(raw.expiresAt)
+  return {
+    id: id,
+    kind: kind,
+    title: shapeBubbleText(String(raw.title || "Allow this?"), 120),
+    detail: shapeBubbleText(String(raw.detail || ""), 240),
+    host: kind === "host" ? String(raw.host || "") : "",
+    // Only a host is worth remembering. A command is a one-off by nature,
+    // and an "always" on one would be a standing permission to run anything.
+    repeatable: kind === "host",
+    expiresAt: isFinite(expires) ? expires : 0
+  }
+}
+
+function consentVerdict(id, verdict) {
+  var choice = verdict === "allow" || verdict === "always" ? verdict : "deny"
+  return JSON.stringify({ id: String(id || ""), verdict: choice }) + "\n"
+}
+
+function readStagedChanges(text) {
+  var raw = null
+  try { raw = JSON.parse(String(text || "")) } catch (e) { return { count: 0, changes: [] } }
+  if (!raw || typeof raw !== "object") return { count: 0, changes: [] }
+  var list = Array.isArray(raw.changes) ? raw.changes : []
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    var item = list[i]
+    if (!item || typeof item !== "object") continue
+    var path = String(item.path || "")
+    var kind = String(item.kind || "")
+    if (path === "" || path.indexOf("..") === 0) continue
+    out.push({ path: path, kind: kind })
+  }
+  var count = Number(raw.count)
+  return { count: isFinite(count) && count >= 0 ? count : out.length, changes: out }
+}
+
+// The sentence the user is asked to approve. Naming the first few files is
+// the difference between consenting to a number and consenting to a change.
+function describeStagedChanges(staged, workdir) {
+  var data = staged && typeof staged === "object" ? staged : ({ count: 0, changes: [] })
+  var count = Number(data.count) || 0
+  if (count <= 0) return ""
+  var names = []
+  var list = Array.isArray(data.changes) ? data.changes : []
+  for (var i = 0; i < list.length && names.length < 3; i++) names.push(list[i].path)
+  var head = count === 1 ? "1 file" : String(count) + " files"
+  var where = String(workdir || "")
+  var tail = names.join(", ")
+  if (count > names.length) tail += ", …"
+  return head + (where === "" ? "" : " in " + where) + ": " + tail
 }
 
 // Put a long-running child in its own process group, behind a guardian that is
@@ -512,38 +657,42 @@ function buildGuardedRunner(cwd, argv) {
     + " rm -f -- \"$ready\"; wait \"$guard\"; code=$?; exit \"$code\""
 }
 
+// The console is a terminal with a person in front of it, which is the one
+// place an agent can ask for itself. So it is launched in its own default
+// mode and does its own asking: no flag here approves anything in advance.
 function buildConsoleResume(agent, sessionId, prompt) {
   var argv = null
   if (agent === "claude" && sessionId)
-    argv = ["claude", "--permission-mode", "auto", "--resume", sessionId]
+    argv = ["claude", "--resume", sessionId]
   if (agent === "codex" && sessionId)
-    argv = ["codex", "resume", sessionId, "--approve-for-me"]
-  // `opencode --session <id>` opens the TUI on that conversation; `--auto`
-  // is what omarchy-agent passes so it does not stop to ask.
+    argv = ["codex", "resume", sessionId]
+  // `opencode --session <id>` opens the TUI on that conversation.
   if (agent === "opencode" && sessionId)
-    argv = ["opencode", "--auto", "--session", sessionId]
+    argv = ["opencode", "--session", sessionId]
   if (argv === null || String(prompt || "") === "") return argv
   if (agent === "opencode") argv.push("--prompt", String(prompt))
   else argv.push("--", String(prompt))
   return argv
 }
 
-// Interactive launch arguments mirror omarchy-agent. Keeping the small map
-// here lets a plugin-specific agent remain the same agent when it escalates
-// to a terminal instead of silently falling back to the desktop default.
+// Which agents Omarchy Iris knows how to start in a terminal. It used to
+// mirror omarchy-agent's launch flags, which meant every one of these carried
+// that CLI's skip-the-questions switch into a window the user was watching.
+// A watched agent that never asks is the worst of both: it looks supervised
+// and is not. Each one now starts the way it starts when you type its name.
 function buildConsoleCommand(agent, prompt) {
   var id = String(agent || "")
   var text = String(prompt || "")
   var argv = null
-  if (id === "opencode") argv = ["opencode", "--auto"]
-  else if (id === "gemini") argv = ["gemini", "--yolo"]
-  else if (id === "agy") argv = ["agy", "--dangerously-skip-permissions"]
-  else if (id === "copilot") argv = ["copilot", "--allow-all"]
-  else if (id === "crush") argv = text === "" ? ["crush", "--yolo"] : ["crush", "run", text]
-  else if (id === "claude") argv = ["claude", "--permission-mode", "auto"]
-  else if (id === "grok") argv = ["grok", "--permission-mode", "bypassPermissions"]
-  else if (id === "codex") argv = ["codex", "--approve-for-me"]
-  else if (id === "omp") argv = ["omp", "--auto-approve"]
+  if (id === "opencode") argv = ["opencode"]
+  else if (id === "gemini") argv = ["gemini"]
+  else if (id === "agy") argv = ["agy"]
+  else if (id === "copilot") argv = ["copilot"]
+  else if (id === "crush") argv = text === "" ? ["crush"] : ["crush", "run", text]
+  else if (id === "claude") argv = ["claude"]
+  else if (id === "grok") argv = ["grok"]
+  else if (id === "codex") argv = ["codex"]
+  else if (id === "omp") argv = ["omp"]
   else if (id === "ori") argv = ["ori", "code"]
   else if (id === "pi") argv = ["pi"]
   if (argv === null || text === "" || id === "crush") return argv
@@ -1359,6 +1508,14 @@ if (typeof module !== "undefined") {
     segmentByName: segmentByName,
     travelPlan: travelPlan,
     buildTalkCommand: buildTalkCommand,
+    buildWardenCommand: buildWardenCommand,
+    buildOrderCommand: buildOrderCommand,
+    sandboxBriefing: sandboxBriefing,
+    readPreflight: readPreflight,
+    readConsentRequest: readConsentRequest,
+    consentVerdict: consentVerdict,
+    readStagedChanges: readStagedChanges,
+    describeStagedChanges: describeStagedChanges,
     buildGuardedRunner: buildGuardedRunner,
     canTalkTo: canTalkTo,
     canOpenConsole: canOpenConsole,

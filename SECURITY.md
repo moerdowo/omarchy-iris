@@ -21,22 +21,61 @@ can affect a later turn.
 ## Trust boundary
 
 Omarchy plugins execute unsandboxed inside the long-lived `omarchy-shell`
-process. Omarchy Iris does not make that boundary narrower.
+process. Omarchy Iris does not make that boundary narrower for itself. It does
+make it much narrower for the agent it launches.
 
-An explicit bubble submission or `omarchy-shell iris order …` call runs
-the selected agent headlessly and unattended. Depending on the agent and the
-installed Omarchy version, that mode may approve actions automatically or
-bypass approval and sandbox checks entirely. Sending an order to the Quake
-console or opening a saved conversation there makes the process visible and
-steerable, but does not create a sandbox or promise per-tool confirmation.
-Opening an empty console starts no order until the user enters one; forwarding
-an order to it starts that order immediately.
+### Unattended orders
 
-The selected agent has the same filesystem and network reach its CLI has in a
-terminal. Apart from the agent it launches, Omarchy Iris's own runtime makes no
-network request and sends no telemetry. The plugin code itself may write only
-its documented state plus this plugin's own entry in Omarchy's `shell.json`,
-including the documented one-time migration of pre-4.0 entries. It must not
-install agent hooks, edit another application's settings, or execute an order
-without a user action or explicit IPC call. Reports that show it crossing one
-of those boundaries are security issues.
+An explicit bubble submission or `omarchy-shell iris order …` call runs the
+selected agent inside `bin/iris-warden`: a bubblewrap sandbox with a read-only
+system, a private `$HOME` under this plugin's state directory (the agent's own
+credential file bound in read-only, nothing else from the real home), no
+Wayland, Hyprland, D-Bus or SSH-agent socket, its own empty network namespace
+with no resolver, and the work directory mounted through an overlay so its
+writes are staged rather than made.
+
+Three actions leave that sandbox, and each requires one explicit answer from
+the user before it happens:
+
+- a TCP connection to a host outside the agent's own API allowlist,
+- a command run outside the sandbox, submitted through `iris-do`,
+- publishing the staged writes into the real work directory.
+
+The broker that asks those questions runs outside the sandbox and is reached
+only over a bind-mounted unix socket. Nothing inside can write a verdict,
+enumerate pending requests, or reach the state directory the verdicts live in.
+An unanswered question is refused after two minutes.
+
+Where the kernel or the install cannot provide that sandbox, an order is not
+run in a weaker mode: it is routed to the interactive console.
+
+### Interactive console sessions
+
+The console launches each agent in its own default mode, with no
+automatic-approval or sandbox-bypass flag of any kind, so the agent asks the
+user for itself. The user is present; that is the boundary. Opening an empty
+console starts no order until one is entered; forwarding an order to it starts
+that order immediately.
+
+### What is a security issue here
+
+The agent has the reach the sandbox and the user's consents give it, and it
+still holds its own API credential. Reports that show any of the following are
+security issues:
+
+- reaching a host, running a command, or changing a file outside the work
+  directory without a consent that named it,
+- any path by which the sandboxed process influences a verdict, the consent
+  files, this plugin's state, or the shell it runs under,
+- publishing staged changes through a symlink or path component the agent
+  planted,
+- an automatic-approval flag reachable outside the sandbox,
+- command or argument injection, path traversal, unsafe plugin/config
+  migration, unintended writes outside the documented config and state,
+  duplicate agent execution, or a stale process callback that can affect a
+  later turn.
+
+Apart from the agent it launches and that agent's brokered connections,
+Omarchy Iris's own runtime makes no network request and sends no telemetry. It
+must not install agent hooks, edit another application's settings, or execute
+an order without a user action or explicit IPC call.
