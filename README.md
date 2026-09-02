@@ -41,11 +41,13 @@ none of its state.
 - **Runtime:** Omarchy 4, including its Quickshell/Hyprland integration,
   `bash`, `python3`, `jq`, and the regular `omarchy-*` helpers. Omarchy Iris installs no
   system package, daemon, hook, or background unit of its own.
-- **Unattended orders:** `bubblewrap` 0.9 or newer (`sudo pacman -S
-  bubblewrap`; the staging overlay needs `--overlay`, which 0.9 added), plus a
-  kernel with unprivileged user namespaces and unprivileged overlayfs — both
-  are on by default on Arch and Omarchy. Without them the companion still
-  works and orders go to the console instead. See [The sandbox](#the-sandbox).
+- **Unattended orders:** the `bubblewrap` package, 0.9 or newer — the staging
+  overlay needs its `--overlay`, which 0.9 added. Install it with your usual
+  package manager; this plugin never installs anything and asks for no
+  privilege. Also a kernel with unprivileged user namespaces and unprivileged
+  overlayfs — both are on by default on Arch and Omarchy. Without any of it the
+  companion still works and orders go to the console instead. See
+  [The sandbox](#the-sandbox).
 - **Orders:** an agent CLI already discovered and configured by Omarchy. Claude,
   Codex, and OpenCode support bubble conversations; other Omarchy agents open
   in the native console scratchpad. The companion and its non-agent controls remain usable
