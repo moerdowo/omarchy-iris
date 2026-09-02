@@ -2038,9 +2038,12 @@ Item {
 
   // "allow", "always" or "deny". Anything else, including the turn ending
   // under the question, is a refusal on the broker's side after its timeout.
+  // The digest of the exact subject that was displayed goes back with the
+  // answer, and the broker checks it: an answer is an answer about one thing.
   function answerConsent(verdict) {
     if (root.consentRequest === null) return false
-    consentReply.setText(Model.consentVerdict(root.consentRequest.id, verdict))
+    consentReply.setText(Model.consentVerdict(
+      root.consentRequest.id, verdict, root.consentRequest.digest))
     root.consentRequest = null
     return true
   }
@@ -2080,8 +2083,15 @@ Item {
       root.stagedChanges = null
       root.reviewRequest = null
       root.sayMode = code === 0 ? "say" : "error"
-      root.sayText = code !== 0 ? "Those changes could not be published."
+      // A refused publication is not a failure to report vaguely: it means
+      // what was approved is not what is there now, and the user has to see
+      // the new set rather than press the button again.
+      root.sayText = code !== 0
+        ? (stageAction.verb === "apply"
+           ? "Those changes are not the ones you approved. Nothing was published."
+           : "Those changes could not be discarded.")
         : stageAction.verb === "apply" ? "Applied." : "Discarded."
+      if (code !== 0 && stageAction.verb === "apply") root.reviewStagedChanges()
       statusWrite.restart()
     }
   }
@@ -2089,7 +2099,7 @@ Item {
   function noteStagedChanges(payload) {
     var staged = Model.readStagedChanges(payload)
     root.stagedChanges = staged
-    if (staged.count <= 0) {
+    if (staged.count <= 0 || staged.stageId === "") {
       root.reviewRequest = null
       statusWrite.restart()
       return
@@ -2099,11 +2109,24 @@ Item {
     var headline = root.sayMode === "say" && root.sayText !== "" ? root.sayText
       : "Iris staged changes in " + root.stagedWorkdir + "."
     root.promptOpen = false
+    // The request keeps the scan itself, not a way to recompute it. What the
+    // user reads here is what `apply` is told to expect, and the warden
+    // re-derives that digest before it publishes anything — so a work
+    // directory setting changed while this card is open, or a staging layer
+    // that moved underneath it, fails closed instead of quietly retargeting.
     root.reviewRequest = {
       id: "review",
       kind: "apply",
       title: Model.shapeBubbleText(headline, 160),
-      detail: Model.describeStagedChanges(staged, root.stagedWorkdir),
+      note: staged.complete
+        ? "Staged in " + staged.workdir + ". Nothing has changed on disk yet."
+        : "Too many changes to show in full (" + String(staged.count)
+          + "). Iris will not publish a set it cannot show you; discard it, or"
+          + " inspect the staging layer yourself.",
+      lines: staged.complete ? Model.renderStagedChanges(staged) : [],
+      summary: Model.summariseStagedChanges(staged, root.stagedWorkdir),
+      canAllow: staged.complete,
+      staged: staged,
       repeatable: false
     }
     statusWrite.restart()
@@ -2116,10 +2139,15 @@ Item {
 
   function resolveReview(publish) {
     if (root.reviewRequest === null || stageAction.running) return false
-    if (root.wardenPath === "") return false
+    // Built from the scan the user read — its staging layer, its work
+    // directory, its digest — and never from live configuration. Recomputing
+    // the work directory here is how an approval of one review would end up
+    // publishing a different, older stage.
+    var command = Model.buildStageCommand(root.wardenPath,
+      publish ? "apply" : "discard", root.reviewRequest.staged, root.wardenState)
+    if (!command) return false
     stageAction.verb = publish ? "apply" : "discard"
-    stageAction.command = [root.wardenPath, stageAction.verb,
-      "--state", root.wardenState, "--workdir", root.orderCwd()]
+    stageAction.command = command
     stageAction.running = true
     return true
   }
@@ -2128,8 +2156,11 @@ Item {
   // apart and should not have to.
   function answerActiveConsent(verdict) {
     if (root.consentRequest !== null) return root.answerConsent(verdict)
-    if (root.reviewRequest !== null) return root.resolveReview(verdict !== "deny")
-    return false
+    if (root.reviewRequest === null) return false
+    // A set that cannot be shown in full cannot be approved. Discard is the
+    // only answer left, and asking to publish is refused rather than obeyed.
+    if (verdict !== "deny" && root.reviewRequest.canAllow !== true) return false
+    return root.resolveReview(verdict !== "deny")
   }
 
   Process {
@@ -2639,8 +2670,14 @@ Item {
       sandbox: sandboxProbed ? (sandboxReady ? "enforced" : "unavailable") : "checking",
       sandboxNote: sandboxWhyNot.slice(0, 200),
       consentKind: activeConsent ? String(activeConsent.kind) : "",
-      consentDetail: activeConsent ? String(activeConsent.detail).slice(0, 200) : "",
+      // The subject in full, as displayed. A status mirror that shortened it
+      // would be one more place a reader could believe they had seen the
+      // whole command.
+      consentSubject: activeConsent && Array.isArray(activeConsent.lines)
+        ? activeConsent.lines : [],
+      consentDigest: activeConsent ? String(activeConsent.digest || "") : "",
       stagedChanges: stagedChanges ? Number(stagedChanges.count) : 0,
+      stagedDigest: stagedChanges ? String(stagedChanges.digest || "") : "",
       pet: spritePetId !== "" ? spritePetId : cfgPet,
       shell: irisPet ? cfgShell : "",
       tint: irisPet ? cfgTint : "",
@@ -2922,6 +2959,8 @@ Item {
     function allow(): string {
       if (root.activeConsent === null) return "nothing is waiting"
       var what = String(root.activeConsent.kind)
+      if (what === "apply" && root.activeConsent.canAllow !== true)
+        return "this change set is too large to show in full, so it cannot be approved"
       return root.answerActiveConsent("allow")
         ? (what === "apply" ? "publishing the staged changes" : "allowed") : "could not answer"
     }
@@ -2935,7 +2974,11 @@ Item {
 
     function pending(): string {
       if (root.activeConsent === null) return "nothing is waiting"
-      return String(root.activeConsent.title) + " " + String(root.activeConsent.detail)
+      var lines = Array.isArray(root.activeConsent.lines) ? root.activeConsent.lines : []
+      var out = String(root.activeConsent.title)
+      for (var i = 0; i < lines.length; i++) out += "\n  " + String(lines[i])
+      if (root.activeConsent.note) out += "\n" + String(root.activeConsent.note)
+      return out
     }
 
     function sandbox(): string {
@@ -3220,8 +3263,14 @@ Item {
           sayMode: root.sayMode
           sayText: root.sayText
           consentTitle: root.activeConsent ? String(root.activeConsent.title) : ""
-          consentDetail: root.activeConsent ? String(root.activeConsent.detail) : ""
+          consentLines: root.activeConsent && Array.isArray(root.activeConsent.lines)
+            ? root.activeConsent.lines : []
+          consentNote: root.activeConsent
+            ? String(root.activeConsent.note
+                || (root.activeConsent.cwd ? "in " + root.activeConsent.cwd : ""))
+            : ""
           consentRepeatable: root.activeConsent ? root.activeConsent.repeatable === true : false
+          consentCanAllow: root.activeConsent ? root.activeConsent.canAllow !== false : false
           consentAllow: root.activeConsent && root.activeConsent.kind === "apply" ? "Apply" : "Allow"
           consentDeny: root.activeConsent && root.activeConsent.kind === "apply" ? "Discard" : "Deny"
           spriteOk: root.spriteOk

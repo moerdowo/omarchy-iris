@@ -1,5 +1,60 @@
 # Changelog
 
+## 4.1.0 — 2026-09-02
+
+A marketplace review of 4.0.0 found the sandbox sound and the *consent* on top
+of it not. Three findings, all of them right, all of them fixed here. The
+shape of the fix is two properties every question now has.
+
+### Exact
+
+- **The command shown is the command run.** The broker used to flatten argv
+  with spaces and cut it at 400 characters, and the reader cut it again at
+  240. So an agent could put the consequential half past the cut, and nothing
+  showed where one argument ended and the next began. Every element is now
+  carried structurally end to end and drawn on its own numbered line, quoted,
+  with control characters made visible — a newline in an argument cannot
+  forge a line break, and an empty argument is still visible as one.
+- **A command that cannot be shown in full is refused, not trimmed.** Twelve
+  elements, 160 characters each, 800 total. Past that the warden never asks
+  the question, and tells the agent to break the work into steps that can be
+  displayed. Consent to a truncated command is consent to whatever was after
+  the cut.
+- **The complete change set is shown.** No 200-entry cap and no "first three
+  paths": every staged change is listed with what makes it consequential —
+  a link's target, a file's size, mode and content hash. A set too large to
+  render whole is still counted and digested, and Iris refuses to offer Apply
+  for it at all rather than asking about a summary.
+
+### Bound
+
+- **Every verdict names its subject.** A request carries a digest over the
+  canonical subject — the exact argv and its working directory, or the host
+  and port — and the answer has to carry that digest back. An approval cannot
+  be replayed onto another command or drift onto one that changed while the
+  card was open.
+- **A review is bound to the stage it was made from.** The scan now returns
+  its staging-layer id, its work directory, that directory's inode identity,
+  and a digest over the complete set; the review card keeps all of it. Apply
+  is built from what was read, never recomputed from live configuration when
+  the button is pressed — which is how an approval of one review could have
+  published a different, older stage.
+- **Publication verifies before it publishes.** `apply` re-derives the digest
+  at the moment it acts and fails closed if anything moved: a path, a type, a
+  mode, a link target, a byte of content, or the work directory itself being
+  replaced. The turn and the publication also take an exclusive lock on the
+  staging layer, so a publication can no longer land while a turn is still
+  writing into it.
+
+### Also
+
+- The sandbox is never shown Iris's own state directory, even when the agent
+  binary happens to sit beside it.
+- `iris-warden run --consent-timeout` shortens the wait for an answer, so a
+  test suite fails fast instead of sitting out the two minutes a person gets.
+- `omarchy-shell iris pending` prints the subject line by line, and the
+  status file carries it whole rather than clipped to 200 characters.
+
 ## 4.0.0 — 2026-09-02
 
 Breaking, and the breakage is the point: an unattended order is no longer the

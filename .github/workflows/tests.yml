@@ -198,3 +198,18 @@ jobs:
           [[ -z $stray ]] || { echo "a bypass flag reached the plugin:" >&2; echo "$stray" >&2; exit 1; }
           grep -q 'if (sandboxed !== true) return null' keystone/Model.js \
             || { echo "buildTalkCommand no longer refuses to build unsandboxed" >&2; exit 1; }
+
+      - name: a consent subject is never shortened on its way to the screen
+        # shapeBubbleText collapses whitespace and truncates. That is right for
+        # a title and wrong for the thing being consented to; a review found it
+        # applied to a command line, where the interesting half went past the
+        # cut. Titles only, and the check is here because the mistake reads as
+        # harmless.
+        run: |
+          set -euo pipefail
+          subject=$(awk '/^function readConsentRequest/,/^}/' keystone/Model.js \
+            | grep -n 'shapeBubbleText' | grep -v 'title:' || true)
+          [[ -z $subject ]] \
+            || { echo "a consent subject is being shortened:" >&2; echo "$subject" >&2; exit 1; }
+          grep -q 'digest: String(digest || "")' keystone/Model.js \
+            || { echo "a verdict no longer names its subject" >&2; exit 1; }

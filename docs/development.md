@@ -47,6 +47,27 @@ order to the console instead of running it a weaker way; that fallback is the
 whole reason the plugin still works on a kernel without unprivileged
 namespaces.
 
+Two properties are what make a consent question worth anything, and both are
+easy to lose by accident:
+
+**Exact.** Nothing between the broker and the card may shorten or flatten a
+subject. A command travels as its argv, not as a joined string, and is drawn
+one numbered, quoted element per line — `Model.renderArgv`, mirrored by
+`render_argv` in the warden. `shapeBubbleText` is for titles and must never
+touch a subject: it collapses whitespace and truncates, which is exactly the
+bug the second review found. What cannot be rendered whole is refused, in the
+warden (`argv_display_refusal`) and again on the way in
+(`Model.argvDisplayable`), because a subject that arrived too big should be
+dropped rather than drawn short.
+
+**Bound.** Every request carries `digest`, every verdict carries it back, and
+the warden compares before acting. For a publication the digest covers the
+staging layer, the work directory's inode identity and every entry's kind,
+path, mode, size, content hash and link target — so `apply` can re-derive it
+and fail closed. The review card keeps the scan it was built from and
+`buildStageCommand` reads that; recomputing `orderCwd()` at click time is how
+an approval of one review published a different stage.
+
 Consent is two files in `$XDG_STATE_HOME/omarchy/iris/warden/consent/`:
 the broker writes `pending.json` and blocks, the service writes
 `verdict.json`. Neither side has to be alive when the other starts, a crashed
@@ -56,7 +77,9 @@ service polls only while a turn is running.
 
 Staged writes are the overlay's upper layer, read directly: a regular file is
 an addition or a rewrite, a character device with device number zero is
-overlayfs's whiteout for a deletion. `apply` walks it with `openat` and
+overlayfs's whiteout for a deletion. Anything else is `unknown`, and a stage
+holding one cannot be published — the approval covered a description, so a
+thing that cannot be described cannot be covered. `apply` walks it with `openat` and
 `O_NOFOLLOW` at every component and refuses a symlink rather than following
 it, because it is walking a tree the agent just wrote to.
 

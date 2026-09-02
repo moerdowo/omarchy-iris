@@ -40,6 +40,7 @@ Subcommands used inside the sandbox, reached only through /iris/bin:
 
 import argparse
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -73,6 +74,19 @@ CONSENT_TIMEOUT = 120.0
 EXEC_TIMEOUT = 120.0
 EXEC_OUTPUT_MAX = 16384
 
+# You cannot consent to what you cannot read, so nothing on the way to the
+# screen may shorten a command. A command that will not fit on the card is
+# refused instead of trimmed: the agent can ask for something smaller, and a
+# payload hidden past a truncation point has nowhere to hide.
+EXEC_MAX_ELEMENTS = 12
+EXEC_MAX_ELEMENT_CHARS = 160
+EXEC_MAX_TOTAL_CHARS = 800
+
+# The staged change set is displayed in full or not approved at all. This is
+# the point past which "in full" stops being a thing a person can do; beyond
+# it Iris still counts and digests every entry, and refuses to offer Apply.
+STAGE_LIST_MAX = 5000
+
 # What each agent must reach to be the agent at all. Nothing else resolves,
 # and anything else asks. Kept deliberately short: a host that is missing
 # costs one consent prompt, a host that is wrongly present costs the point of
@@ -103,6 +117,88 @@ ENV_KEEP_PREFIX = ("ANTHROPIC_", "OPENAI_", "OPENCODE_", "CODEX_")
 ENV_DENY = re.compile(r"(PROXY|BASE_URL|_URL|CONFIG_DIR|HOME)$", re.IGNORECASE)
 
 HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,252}[A-Za-z0-9])?$")
+
+
+# ------------------------------------------------------- exact and bound
+#
+# Two properties every consent question needs, and neither is free.
+#
+# *Exact* means the thing displayed is the thing that happens: argument
+# boundaries visible, control characters visible, nothing elided anywhere on
+# the path from here to the card. A command whose faithful rendering does not
+# fit is refused, because a truncated command is an invitation to put the
+# interesting half past the cut.
+#
+# *Bound* means the answer refers to that thing and no other. Every request
+# carries a digest of its canonical subject, every verdict has to carry the
+# same digest back, and the action re-derives the digest at the moment it
+# acts. An approval cannot drift onto a different command, a different work
+# directory, or a staging layer that changed while the card was open.
+
+
+def display_element(value):
+    """One argv element, quoted, with every control character made visible."""
+    out = ['"']
+    for char in str(value):
+        if char == "\\":
+            out.append("\\\\")
+        elif char == '"':
+            out.append('\\"')
+        elif char == "\n":
+            out.append("\\n")
+        elif char == "\r":
+            out.append("\\r")
+        elif char == "\t":
+            out.append("\\t")
+        elif ord(char) < 0x20 or ord(char) == 0x7F:
+            out.append("\\x%02x" % ord(char))
+        else:
+            out.append(char)
+    out.append('"')
+    return "".join(out)
+
+
+def render_argv(argv):
+    return ["%d %s" % (index + 1, display_element(part))
+            for index, part in enumerate(argv)]
+
+
+def argv_display_refusal(argv):
+    """Why this command cannot be shown in full, or None if it can."""
+    if len(argv) > EXEC_MAX_ELEMENTS:
+        return ("this command has %d arguments; Iris shows at most %d in full, "
+                "and will not ask about a command it cannot show"
+                % (len(argv), EXEC_MAX_ELEMENTS))
+    lines = render_argv(argv)
+    for index, line in enumerate(lines):
+        if len(line) > EXEC_MAX_ELEMENT_CHARS:
+            return ("argument %d is %d characters; Iris shows at most %d per "
+                    "argument. Break the work into steps it can display."
+                    % (index + 1, len(line), EXEC_MAX_ELEMENT_CHARS))
+    total = sum(len(line) for line in lines)
+    if total > EXEC_MAX_TOTAL_CHARS:
+        return ("this command renders to %d characters; Iris shows at most %d "
+                "in full. Break the work into steps it can display."
+                % (total, EXEC_MAX_TOTAL_CHARS))
+    return None
+
+
+def digest_of(kind, parts):
+    """A digest over an unambiguous encoding of the subject.
+
+    Separators that cannot occur in the encoded fields, and a leading kind, so
+    no two different subjects can serialise to the same bytes.
+    """
+    payload = "\x1e".join([kind] + [str(part) for part in parts])
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def argv_digest(argv, cwd):
+    return digest_of("iris-exec-v1", [cwd, str(len(argv))] + list(argv))
+
+
+def host_digest(host, port):
+    return digest_of("iris-host-v1", [host, str(port)])
 
 
 def fail(message, code=2):
@@ -226,22 +322,28 @@ class Consent:
         hosts.add(host)
         atomic_write_json(self.allowed, sorted(hosts))
 
-    def ask(self, kind, title, detail, extra=None):
+    def ask(self, kind, title, digest, extra=None):
         """Put one question on screen and block until it is answered.
 
         Returns "allow", "always" or "deny". Every path that is not a person
-        clicking Allow — a timeout, a shutdown, a malformed verdict — is
-        "deny", because the question is asked about something irreversible.
+        answering this exact question — a timeout, a shutdown, a malformed
+        verdict, a verdict for another request or another subject — is "deny",
+        because the question is asked about something irreversible.
+
+        `digest` is that subject, canonically encoded by the caller. The
+        verdict has to carry it back, so an answer cannot be replayed onto a
+        different command or drift onto one that changed while it was on
+        screen.
         """
         with self.lock:
             self.counter += 1
             request_id = "%d-%d" % (int(time.time() * 1000), self.counter)
             payload = {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "id": request_id,
                 "kind": kind,
                 "title": title,
-                "detail": detail,
+                "digest": digest,
                 "expiresAt": time.time() + self.timeout,
             }
             if extra:
@@ -254,6 +356,9 @@ class Consent:
                 reply = read_json(self.verdict)
                 if reply and reply.get("id") == request_id:
                     choice = str(reply.get("verdict") or "")
+                    if str(reply.get("digest") or "") != digest:
+                        # An answer about something else is not an answer.
+                        choice = "deny"
                     answer = choice if choice in ("allow", "always") else "deny"
                     break
                 time.sleep(0.1)
@@ -331,8 +436,9 @@ class Broker:
         answer = self.consent.ask(
             "host",
             "Let the agent reach " + host + "?",
-            "Its sandbox has no other way out to the network.",
-            {"host": host, "port": port})
+            host_digest(host, port),
+            {"host": host, "port": port,
+             "detail": "%s port %d" % (host, port)})
         if answer == "always":
             self.consent.remember_host(host)
         return answer in ("allow", "always")
@@ -365,15 +471,24 @@ class Broker:
                 or not all(isinstance(part, str) for part in argv)):
             send_frame(client, {"ok": False, "error": "bad command"})
             return
-        printable = " ".join(argv)
-        if len(printable) > 400:
-            printable = printable[:399] + "…"
+        refusal = argv_display_refusal(argv)
+        if refusal is not None:
+            # Never asked, because it could not have been asked honestly.
+            send_frame(client, {"ok": False, "error": refusal, "denied": True})
+            return
+        digest = argv_digest(argv, self.workdir)
         answer = self.consent.ask(
             "exec",
             "Run this on your desktop?",
-            printable,
-            {"argv": argv})
+            digest,
+            {"argv": list(argv), "cwd": self.workdir,
+             "display": render_argv(argv)})
         if answer not in ("allow", "always"):
+            send_frame(client, {"ok": False, "error": "denied", "denied": True})
+            return
+        # The argv that was digested is the argv that runs. Nothing between
+        # the question and here may have substituted a different list.
+        if argv_digest(argv, self.workdir) != digest:
             send_frame(client, {"ok": False, "error": "denied", "denied": True})
             return
         try:
@@ -486,7 +601,7 @@ def host_root_binds():
     return args
 
 
-def agent_binds(program):
+def agent_binds(program, forbidden=()):
     """Read-only mounts that make one CLI runnable inside an empty home.
 
     Agents install themselves anywhere: a distribution package under /usr, a
@@ -501,6 +616,13 @@ def agent_binds(program):
         path = os.path.abspath(path)
         if path in seen or not os.path.exists(path):
             return
+        # An agent installed beside Iris's own state would otherwise drag it
+        # in: the consent files, the staging layers, the remembered hosts.
+        # Read-only is not good enough — the sandbox has no business seeing
+        # the questions being asked about it.
+        for keep_out in forbidden:
+            if path == keep_out or keep_out.startswith(path.rstrip("/") + "/"):
+                return
         seen.add(path)
         binds.extend(["--ro-bind", path, path])
 
@@ -582,7 +704,7 @@ def sandbox_environment(extra_path):
 
 def build_sandbox(state, agent, workdir, stage, run_socket, bin_dir, argv):
     """The bwrap command line, and the environment the agent sees inside it."""
-    binds, resolved = agent_binds(argv[0])
+    binds, resolved = agent_binds(argv[0], forbidden=(os.path.abspath(state),))
     if resolved is None:
         fail("cannot find " + argv[0] + " on PATH")
     extra_path = []
@@ -657,7 +779,25 @@ def is_whiteout(st):
     return stat.S_ISCHR(st.st_mode) and st.st_rdev == 0
 
 
+def file_digest(path):
+    sha = hashlib.sha256()
+    try:
+        with open(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as handle:
+            for block in iter(lambda: handle.read(1 << 16), b""):
+                sha.update(block)
+    except OSError:
+        return ""
+    return sha.hexdigest()
+
+
 def scan_stage(stage, workdir):
+    """Everything the overlay's upper layer says happened, in full.
+
+    Every field a person would need to judge one of these entries is here —
+    what kind of change it is, how big, what mode, where a link points, and
+    the content hash — because the approval is over this list and a list that
+    leaves something out is an approval of something unseen.
+    """
     upper = os.path.join(stage, "upper")
     changes = []
     for current, directories, files in os.walk(upper):
@@ -671,21 +811,78 @@ def scan_stage(stage, workdir):
             except OSError:
                 continue
             target = os.path.join(workdir, relative)
+            entry = {"path": relative, "bytes": 0, "mode": "", "sha256": "", "target": ""}
             if is_whiteout(st):
-                changes.append({"path": relative, "kind": "delete", "bytes": 0})
+                entry["kind"] = "delete"
             elif stat.S_ISDIR(st.st_mode):
-                if not os.path.isdir(target):
-                    changes.append({"path": relative, "kind": "dir", "bytes": 0})
+                if os.path.isdir(target):
+                    continue
+                entry["kind"] = "dir"
+                entry["mode"] = "%04o" % stat.S_IMODE(st.st_mode)
             elif stat.S_ISLNK(st.st_mode):
-                changes.append({"path": relative, "kind": "link", "bytes": 0})
+                entry["kind"] = "link"
+                try:
+                    entry["target"] = os.readlink(full)
+                except OSError:
+                    entry["target"] = "?"
             elif stat.S_ISREG(st.st_mode):
-                changes.append({
-                    "path": relative,
-                    "kind": "modify" if os.path.lexists(target) else "add",
-                    "bytes": st.st_size,
-                })
+                entry["kind"] = "modify" if os.path.lexists(target) else "add"
+                entry["bytes"] = st.st_size
+                entry["mode"] = "%04o" % stat.S_IMODE(st.st_mode)
+                entry["sha256"] = file_digest(full)
+            else:
+                # Anything else is not a change this can describe, and an
+                # approval must never cover something it did not describe.
+                entry["kind"] = "unknown"
+            changes.append(entry)
     changes.sort(key=lambda item: item["path"])
     return changes
+
+
+def workdir_identity(workdir):
+    """The directory itself, not the name it currently answers to."""
+    try:
+        st = os.stat(workdir)
+    except OSError:
+        return ""
+    return "%d:%d" % (st.st_dev, st.st_ino)
+
+
+def stage_digest(stage_id, workdir, identity, changes):
+    """One value over the complete change set and where it would land.
+
+    Everything a publication would do is in here: the stage it comes from,
+    the directory it goes to *by inode*, and for every entry its kind, path,
+    mode, size, content hash and link target. Anything that moves between the
+    scan and the click moves this, and the publication fails closed.
+    """
+    parts = [stage_id, workdir, identity, str(len(changes))]
+    for entry in changes:
+        parts.append("\x1f".join([
+            entry.get("kind", ""), entry.get("path", ""), entry.get("mode", ""),
+            str(entry.get("bytes", 0)), entry.get("sha256", ""),
+            entry.get("target", "")]))
+    return digest_of("iris-stage-v1", parts)
+
+
+def stage_lock(stage, exclusive=True, blocking=False):
+    """A publication and a turn must never be in this tree at once.
+
+    Returns the held descriptor, or None when somebody else has it. The
+    caller closes it; the kernel drops the lock either way.
+    """
+    private_dir(stage)
+    handle = os.open(os.path.join(stage, "lock"),
+                     os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    if not blocking:
+        mode |= fcntl.LOCK_NB
+    try:
+        fcntl.flock(handle, mode)
+    except OSError:
+        os.close(handle)
+        return None
+    return handle
 
 
 def open_dir(parent_fd, name, create=False):
@@ -978,11 +1175,16 @@ def cmd_run(args):
 
     bin_dir = os.path.dirname(os.path.abspath(__file__))
     stage = stage_for(root, workdir)
-    consent = Consent(root)
+    consent = Consent(root, args.consent_timeout or CONSENT_TIMEOUT)
     consent.clear()
     session_dir = tempfile.mkdtemp(prefix="turn-", dir=runtime_root(root))
     os.chmod(session_dir, 0o700)
     socket_path = os.path.join(session_dir, "broker.sock")
+
+    held = stage_lock(stage)
+    if held is None:
+        fail("this work directory is busy: another turn or a publication is "
+             "using its staging layer")
 
     broker = Broker(socket_path, consent, resolve_hosts(args.agent, args.allow_host),
                     workdir, os.environ.copy())
@@ -1014,61 +1216,111 @@ def cmd_run(args):
     finally:
         broker.close()
         consent.close()
+        os.close(held)
         shutil.rmtree(session_dir, ignore_errors=True)
     return code
 
 
-def cmd_changes(args):
+def stage_paths(args):
     root = state_root(args.state)
     workdir = os.path.realpath(os.path.expanduser(args.workdir or "."))
-    stage = os.path.join(root, "stage",
-                         hashlib.sha256(workdir.encode("utf-8")).hexdigest()[:16])
+    stage_id = hashlib.sha256(workdir.encode("utf-8")).hexdigest()[:16]
+    return root, workdir, stage_id, os.path.join(root, "stage", stage_id)
+
+
+def cmd_changes(args):
+    root, workdir, stage_id, stage = stage_paths(args)
+    identity = workdir_identity(workdir)
     changes = scan_stage(stage, workdir) if os.path.isdir(stage) else []
-    json.dump({"schemaVersion": 1, "workdir": workdir, "count": len(changes),
-               "changes": changes[:200]}, sys.stdout)
+    # The digest covers every entry. The list may be capped for the sake of
+    # the thing that has to draw it, and when it is, `complete` is false and
+    # Iris will not offer to publish: a set nobody can read in full is a set
+    # nobody can approve.
+    report = {
+        "schemaVersion": 2,
+        "stageId": stage_id,
+        "workdir": workdir,
+        "workdirId": identity,
+        "count": len(changes),
+        "complete": len(changes) <= STAGE_LIST_MAX,
+        "digest": stage_digest(stage_id, workdir, identity, changes),
+        "changes": changes[:STAGE_LIST_MAX],
+    }
+    json.dump(report, sys.stdout)
     sys.stdout.write("\n")
     return 0
 
 
 def cmd_apply(args):
-    root = state_root(args.state)
-    workdir = os.path.realpath(os.path.expanduser(args.workdir or "."))
-    stage = os.path.join(root, "stage",
-                         hashlib.sha256(workdir.encode("utf-8")).hexdigest()[:16])
+    root, workdir, stage_id, stage = stage_paths(args)
     upper = os.path.join(stage, "upper")
     if not os.path.isdir(upper):
         fail("nothing staged for " + workdir)
-    applied = []
-    source_fd = os.open(upper, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    dest_fd = os.open(workdir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    # The approval named a stage and a work directory. If either is not the
+    # one in front of us now, this is not the publication that was approved.
+    if args.stage and args.stage != stage_id:
+        fail("this approval was for a different work directory")
+
+    held = stage_lock(stage)
+    if held is None:
+        fail("a turn is still writing here; try again when it has finished")
     try:
-        publish_tree(source_fd, dest_fd, applied)
-    except ValueError as error:
-        fail(str(error))
+        identity = workdir_identity(workdir)
+        changes = scan_stage(stage, workdir)
+        current = stage_digest(stage_id, workdir, identity, changes)
+        # Fail closed. Anything that changed between the scan the user read
+        # and this moment — a path, a type, a mode, a link target, a byte of
+        # content, or the directory itself being replaced — makes the
+        # approval an approval of something else.
+        if args.expect and args.expect != current:
+            fail("these changes are not the ones that were approved; "
+                 "review them again")
+        if any(entry.get("kind") == "unknown" for entry in changes):
+            fail("the staging layer holds something Iris cannot describe; "
+                 "refusing to publish it")
+        applied = []
+        source_fd = os.open(upper, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        dest_fd = os.open(workdir,
+                          os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            publish_tree(source_fd, dest_fd, applied)
+        except ValueError as error:
+            fail(str(error))
+        finally:
+            os.close(source_fd)
+            os.close(dest_fd)
+        clear_stage(stage)
     finally:
-        os.close(source_fd)
-        os.close(dest_fd)
-    clear_stage(stage)
-    json.dump({"applied": len(applied), "workdir": workdir}, sys.stdout)
+        os.close(held)
+    json.dump({"applied": len(applied), "workdir": workdir,
+               "stageId": stage_id, "digest": current}, sys.stdout)
     sys.stdout.write("\n")
     return 0
 
 
 def cmd_discard(args):
-    root = state_root(args.state)
-    workdir = os.path.realpath(os.path.expanduser(args.workdir or "."))
-    stage = os.path.join(root, "stage",
-                         hashlib.sha256(workdir.encode("utf-8")).hexdigest()[:16])
+    root, workdir, stage_id, stage = stage_paths(args)
+    if args.stage and args.stage != stage_id:
+        fail("this approval was for a different work directory")
     if os.path.isdir(stage):
-        clear_stage(stage)
-    json.dump({"discarded": True, "workdir": workdir}, sys.stdout)
+        held = stage_lock(stage)
+        if held is None:
+            fail("a turn is still writing here; try again when it has finished")
+        try:
+            clear_stage(stage)
+        finally:
+            os.close(held)
+    json.dump({"discarded": True, "workdir": workdir, "stageId": stage_id},
+              sys.stdout)
     sys.stdout.write("\n")
     return 0
 
 
 # `--overlay` arrived in bubblewrap 0.9. Below that the probe fails with
 # "Unknown option --overlay-src", which is true and tells a user nothing they
-# can act on.
+# can act on. The version is a hint, not the test: a distribution build can
+# report 0.9 and still refuse the option, so the failure itself is what gets
+# translated.
 OVERLAY_SINCE = (0, 9, 0)
 
 
@@ -1154,6 +1406,8 @@ def main(raw):
     run.add_argument("--agent", default="")
     run.add_argument("--allow-host", action="append", default=[])
     run.add_argument("--create-workdir", action="store_true")
+    # Production waits two minutes for a person. A test waits for a script.
+    run.add_argument("--consent-timeout", type=float, default=0.0)
     run.add_argument("argv", nargs=argparse.REMAINDER)
     run.set_defaults(handler=cmd_run)
 
@@ -1172,6 +1426,12 @@ def main(raw):
         command = sub.add_parser(name)
         command.add_argument("--state")
         command.add_argument("--workdir", required=True)
+        if name != "changes":
+            # What the user actually approved: this staging layer, and this
+            # exact set of changes in it.
+            command.add_argument("--stage", default="")
+        if name == "apply":
+            command.add_argument("--expect", default="")
         command.set_defaults(handler=handler)
 
     preflight = sub.add_parser("preflight")

@@ -6,12 +6,15 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { execFileSync, spawnSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync }
-  from "node:fs"
+import { execFileSync, spawn, spawnSync } from "node:child_process"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync,
+  symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+
+const M = createRequire(import.meta.url)("../keystone/Model.js")
 
 const here = dirname(fileURLToPath(import.meta.url))
 const warden = join(here, "..", "bin", "iris-warden")
@@ -237,16 +240,17 @@ test("a desktop command runs only when the person at the desktop says so",
     "folder = sys.argv[1]",
     "pending = os.path.join(folder, 'pending.json')",
     "verdict = os.path.join(folder, 'verdict.json')",
-    "answers, seen, stop = ['deny', 'allow'], [], time.time() + 90",
+    "answers, seen, stop = ['deny', 'allow'], [], time.time() + 60",
     "while time.time() < stop and len(seen) < 2:",
     "    try: asked = json.load(open(pending))",
     "    except Exception: time.sleep(0.05); continue",
     "    if asked['id'] in seen: time.sleep(0.05); continue",
     "    seen.append(asked['id'])",
-    "    print(asked['kind'], '|', asked['detail'], flush=True)",
+    "    print(asked['kind'], '|', ' '.join(asked['display']), flush=True)",
     "    temporary = verdict + '.tmp'",
+    "    # A verdict carries the digest of what was shown, the way a click does.",
     "    open(temporary, 'w').write(json.dumps({'id': asked['id'],",
-    "        'verdict': answers[len(seen) - 1]}))",
+    "        'digest': asked['digest'], 'verdict': answers[len(seen) - 1]}))",
     "    os.replace(temporary, verdict)",
     ""
   ].join("\n"))
@@ -255,11 +259,13 @@ test("a desktop command runs only when the person at the desktop says so",
   const person = spawnSync("bash", ["-c",
     `python3 ${JSON.stringify(answering)} ${JSON.stringify(join(state, "consent"))} & `
     + `${JSON.stringify(warden)} run --state ${JSON.stringify(state)} `
+    + `--consent-timeout 20 `
     + `--workdir ${JSON.stringify(workdir)} -- ${JSON.stringify(probe)}; wait`],
     { encoding: "utf8", timeout: 120000,
       env: { ...process.env, PATH: `${join(here, "..", "bin")}:${process.env.PATH}` } })
 
-  assert.match(person.stdout, /exec \| \/usr\/bin\/touch/, "the exact command was shown")
+  assert.match(person.stdout, /exec \| 1 "\/usr\/bin\/touch" 2 "/,
+    "every element of the exact command was shown")
   assert.match(person.stdout, /first=77/, "a refusal is reported as a refusal")
   assert.match(person.stdout, /second=0/, "and consent is what runs it")
   assert.doesNotMatch(person.stdout, /first=0/)
@@ -284,4 +290,241 @@ test("a missing work directory is created rather than refused",
     "--create-workdir", "--", "/usr/bin/true"])
   assert.equal(done.status, 0, done.stderr)
   assert.equal(run(["changes", "--state", join(root, "state"), "--workdir", workdir]).status, 0)
+})
+
+test("a command too big to show in full is refused, never asked about",
+  { skip: usable ? false : "this machine cannot build the sandbox" }, () => {
+  // Consent to a truncated command is consent to whatever was past the cut.
+  const root = scratch()
+  const state = join(root, "state")
+  const workdir = join(root, "work")
+  mkdirSync(workdir)
+  const witness = join(root, "witness")
+  const probe = join(root, "probe")
+  writeFileSync(probe, [
+    "#!/usr/bin/env bash",
+    `iris-do /usr/bin/bash -c ${JSON.stringify("#" + "x".repeat(400) + "\ntouch " + witness)}; echo "big=$?"`,
+    ""
+  ].join("\n"))
+  chmodSync(probe, 0o755)
+  mkdirSync(join(state, "consent"), { recursive: true })
+
+  const done = run(["run", "--state", state, "--workdir", workdir,
+    "--consent-timeout", "20", "--", probe],
+    { env: { ...process.env, PATH: `${join(here, "..", "bin")}:${process.env.PATH}` } })
+  assert.match(done.stdout, /big=77/, "refused without ever asking")
+  assert.equal(existsSync(witness), false, "and certainly without running")
+  assert.equal(existsSync(join(state, "consent", "pending.json")), false,
+    "no question was put on screen at all")
+})
+
+test("a verdict for a different command is not an answer to this one",
+  { skip: usable ? false : "this machine cannot build the sandbox" }, () => {
+  const root = scratch()
+  const state = join(root, "state")
+  const workdir = join(root, "work")
+  mkdirSync(workdir)
+  const witness = join(root, "witness")
+  const probe = join(root, "probe")
+  writeFileSync(probe,
+    "#!/usr/bin/env bash\n"
+    + `iris-do /usr/bin/touch ${JSON.stringify(witness)}; echo "rc=$?"\n`)
+  chmodSync(probe, 0o755)
+  mkdirSync(join(state, "consent"), { recursive: true })
+
+  // Answer with the right id and a digest for something else — the shape a
+  // replayed or retargeted approval would have.
+  const answering = join(root, "answer.py")
+  writeFileSync(answering, [
+    "import json, os, sys, time",
+    "folder = sys.argv[1]",
+    "pending = os.path.join(folder, 'pending.json')",
+    "verdict = os.path.join(folder, 'verdict.json')",
+    "stop = time.time() + 60",
+    "while time.time() < stop:",
+    "    try: asked = json.load(open(pending))",
+    "    except Exception: time.sleep(0.05); continue",
+    "    print('digest', asked['digest'], flush=True)",
+    "    temporary = verdict + '.tmp'",
+    "    open(temporary, 'w').write(json.dumps({'id': asked['id'],",
+    "        'verdict': 'allow', 'digest': 'sha256:some-other-command'}))",
+    "    os.replace(temporary, verdict)",
+    "    break",
+    ""
+  ].join("\n"))
+
+  const person = spawnSync("bash", ["-c",
+    `python3 ${JSON.stringify(answering)} ${JSON.stringify(join(state, "consent"))} & `
+    + `${JSON.stringify(warden)} run --state ${JSON.stringify(state)} `
+    + `--consent-timeout 20 `
+    + `--workdir ${JSON.stringify(workdir)} -- ${JSON.stringify(probe)}; wait`],
+    { encoding: "utf8", timeout: 120000,
+      env: { ...process.env, PATH: `${join(here, "..", "bin")}:${process.env.PATH}` } })
+
+  assert.match(person.stdout, /digest sha256:/, "a digest was asked about")
+  assert.match(person.stdout, /rc=77/, "and an allow for another subject is a refusal")
+  assert.equal(existsSync(witness), false)
+})
+
+test("a scan names its stage, its work directory by inode, and every entry",
+  { skip: usable ? false : "this machine cannot build the sandbox" }, () => {
+  const root = scratch()
+  const state = join(root, "state")
+  const workdir = join(root, "work")
+  mkdirSync(workdir)
+  writeFileSync(join(workdir, "edit.txt"), "before\n")
+  const probe = join(root, "probe")
+  writeFileSync(probe, "#!/usr/bin/env bash\nprintf 'after\\n' > edit.txt\n"
+    + "ln -sf /etc/passwd sneaky\nprintf 'x' > added.bin\n")
+  chmodSync(probe, 0o755)
+  run(["run", "--state", state, "--workdir", workdir, "--", probe])
+
+  const scan = JSON.parse(run(["changes", "--state", state, "--workdir", workdir]).stdout)
+  assert.equal(scan.schemaVersion, 2)
+  assert.ok(scan.stageId && scan.digest.startsWith("sha256:"))
+  assert.match(scan.workdirId, /^\d+:\d+$/, "the directory itself, not its name")
+  assert.equal(scan.complete, true)
+  assert.equal(scan.changes.length, scan.count, "the list is the whole set")
+  const link = scan.changes.find(c => c.path === "sneaky")
+  assert.equal(link.kind, "link")
+  assert.equal(link.target, "/etc/passwd", "a link's target is shown")
+  const edit = scan.changes.find(c => c.path === "edit.txt")
+  assert.equal(edit.mode, "0644")
+  assert.match(edit.sha256, /^[0-9a-f]{64}$/, "and content is hashed")
+})
+
+test("publishing fails closed when the stage moved after it was read",
+  { skip: usable ? false : "this machine cannot build the sandbox" }, () => {
+  const root = scratch()
+  const state = join(root, "state")
+  const workdir = join(root, "work")
+  mkdirSync(workdir)
+  writeFileSync(join(workdir, "edit.txt"), "before\n")
+  const probe = join(root, "probe")
+  writeFileSync(probe, "#!/usr/bin/env bash\nprintf 'reviewed\\n' > edit.txt\n")
+  chmodSync(probe, 0o755)
+  run(["run", "--state", state, "--workdir", workdir, "--", probe])
+
+  const scan = JSON.parse(run(["changes", "--state", state, "--workdir", workdir]).stdout)
+  // Something rewrites the staging layer between the review and the click.
+  writeFileSync(join(state, "stage", scan.stageId, "upper", "edit.txt"), "swapped\n")
+
+  const stale = run(["apply", "--state", state, "--workdir", workdir,
+    "--stage", scan.stageId, "--expect", scan.digest])
+  assert.notEqual(stale.status, 0)
+  assert.match(stale.stderr, /not the ones that were approved/)
+  assert.equal(readFileSync(join(workdir, "edit.txt"), "utf8"), "before\n",
+    "nothing was published")
+
+  // Re-reviewing produces a digest for what is actually there, and that works.
+  const fresh = JSON.parse(run(["changes", "--state", state, "--workdir", workdir]).stdout)
+  assert.notEqual(fresh.digest, scan.digest)
+  assert.equal(run(["apply", "--state", state, "--workdir", workdir,
+    "--stage", fresh.stageId, "--expect", fresh.digest]).status, 0)
+  assert.equal(readFileSync(join(workdir, "edit.txt"), "utf8"), "swapped\n")
+})
+
+test("an approval for one work directory cannot publish another",
+  { skip: usable ? false : "this machine cannot build the sandbox" }, () => {
+  const root = scratch()
+  const state = join(root, "state")
+  const mine = join(root, "mine")
+  const other = join(root, "other")
+  mkdirSync(mine)
+  mkdirSync(other)
+  writeFileSync(join(other, "keep.txt"), "untouched\n")
+  const probe = join(root, "probe")
+  writeFileSync(probe, "#!/usr/bin/env bash\nprintf 'staged\\n' > keep.txt\n")
+  chmodSync(probe, 0o755)
+  run(["run", "--state", state, "--workdir", other, "--", probe])
+  const scan = JSON.parse(run(["changes", "--state", state, "--workdir", other]).stdout)
+
+  // The approval says "other"; the click arrives naming "mine".
+  const crossed = run(["apply", "--state", state, "--workdir", mine,
+    "--stage", scan.stageId, "--expect", scan.digest])
+  assert.notEqual(crossed.status, 0)
+  assert.match(crossed.stderr, /different work directory|nothing staged/)
+  assert.equal(readFileSync(join(other, "keep.txt"), "utf8"), "untouched\n")
+})
+
+test("a publication cannot land while a turn is still writing",
+  { skip: usable ? false : "this machine cannot build the sandbox" }, () => {
+  const root = scratch()
+  const state = join(root, "state")
+  const workdir = join(root, "work")
+  mkdirSync(workdir)
+  writeFileSync(join(workdir, "edit.txt"), "before\n")
+  const slow = join(root, "slow")
+  writeFileSync(slow, "#!/usr/bin/env bash\nprintf 'mid\\n' > edit.txt\nsleep 3\n")
+  chmodSync(slow, 0o755)
+
+  const turn = spawn(warden, ["run", "--state", state, "--workdir", workdir, "--", slow],
+    { stdio: "ignore" })
+  try {
+    // Wait for the turn to have taken the stage, then try to publish under it.
+    const deadline = Date.now() + 5000
+    let refused = null
+    while (Date.now() < deadline) {
+      refused = run(["apply", "--state", state, "--workdir", workdir])
+      if (refused.status !== 0 && /still writing/.test(refused.stderr)) break
+      refused = null
+    }
+    assert.ok(refused, "publishing during a turn must be refused")
+    assert.equal(readFileSync(join(workdir, "edit.txt"), "utf8"), "before\n")
+  } finally {
+    turn.kill("SIGTERM")
+  }
+})
+
+test("the answer Iris writes is the answer the broker accepts",
+  { skip: usable ? false : "this machine cannot build the sandbox" }, () => {
+  // The two sides of the consent exchange are written in different languages,
+  // and the digest binding only works if they agree exactly. This drives the
+  // real broker with the real reader and the real writer from Model.js — the
+  // same calls the service makes — rather than a hand-rolled stand-in that
+  // could agree with neither.
+  const root = scratch()
+  const state = join(root, "state")
+  const workdir = join(root, "work")
+  mkdirSync(workdir)
+  const witness = join(root, "witness")
+  const probe = join(root, "probe")
+  writeFileSync(probe,
+    "#!/usr/bin/env bash\n"
+    + `iris-do /usr/bin/touch ${JSON.stringify(witness)}; echo "rc=$?"\n`)
+  chmodSync(probe, 0o755)
+  const consentDir = join(state, "consent")
+  mkdirSync(consentDir, { recursive: true })
+
+  const turn = spawn(warden,
+    ["run", "--state", state, "--workdir", workdir, "--consent-timeout", "30",
+     "--", probe],
+    { encoding: "utf8",
+      env: { ...process.env, PATH: `${join(here, "..", "bin")}:${process.env.PATH}` },
+      stdio: ["ignore", "pipe", "pipe"] })
+  let output = ""
+  turn.stdout.on("data", chunk => { output += chunk })
+
+  let request = null
+  const deadline = Date.now() + 30000
+  while (Date.now() < deadline && request === null) {
+    try {
+      request = M.readConsentRequest(readFileSync(join(consentDir, "pending.json"), "utf8"))
+    } catch { request = null }
+  }
+  assert.ok(request, "the service's own reader understood the broker's question")
+  assert.equal(request.kind, "exec")
+  assert.deepEqual(request.argv, ["/usr/bin/touch", witness])
+  assert.deepEqual(request.lines, ['1 "/usr/bin/touch"', `2 "${witness}"`])
+  assert.ok(request.digest.startsWith("sha256:"))
+
+  // ...and the service's own writer, verbatim.
+  const reply = join(consentDir, "verdict.json")
+  writeFileSync(reply + ".tmp", M.consentVerdict(request.id, "allow", request.digest))
+  renameSync(reply + ".tmp", reply)
+
+  const done = Date.now() + 30000
+  while (Date.now() < done && !existsSync(witness)) { /* wait for the effect */ }
+  assert.ok(existsSync(witness), "an allow written by Model.js is honoured")
+  turn.kill("SIGTERM")
 })

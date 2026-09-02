@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.moerdowo.omarchyiris",
   "name": "Omarchy Iris",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "author": "moerdowo",
   "license": "MIT",
   "description": "Your desktop's chief of staff, wearing a glass orb: an Omarchy-native companion that lives at the screen edge and takes orders through your configured AI agent. Unattended work runs inside a bubblewrap sandbox — read-only system, no home, no desktop sockets, no route to the network — and the three things that leave it ask you first: a host to reach, a command to run, a set of edits to publish. Its band of light is computed rather than blitted, so glass, tint and temper morph rather than cut.",

@@ -549,36 +549,128 @@ function readPreflight(text) {
 // A consent request is written by a process on the other side of a socket, so
 // nothing in it is trusted as a shape: every field is read defensively and a
 // request that does not parse is no request at all.
+// One argv element, quoted, with every control character made visible. This
+// mirrors the warden's own rendering, and exists so the card draws the argv
+// itself rather than a sentence somebody built out of it: a command joined
+// with spaces cannot show where one argument ends and the next begins, which
+// is exactly where a payload goes.
+function displayElement(value) {
+  var text = String(value)
+  var out = "\""
+  for (var i = 0; i < text.length; i++) {
+    var char = text.charAt(i)
+    var code = text.charCodeAt(i)
+    if (char === "\\") out += "\\\\"
+    else if (char === "\"") out += "\\\""
+    else if (char === "\n") out += "\\n"
+    else if (char === "\r") out += "\\r"
+    else if (char === "\t") out += "\\t"
+    else if (code < 0x20 || code === 0x7f)
+      out += "\\x" + (code < 16 ? "0" : "") + code.toString(16)
+    else out += char
+  }
+  return out + "\""
+}
+
+function renderArgv(argv) {
+  var lines = []
+  for (var i = 0; i < argv.length; i++)
+    lines.push(String(i + 1) + " " + displayElement(argv[i]))
+  return lines
+}
+
+// The same budget the warden refuses on, applied again on the way to the
+// screen. The warden should never send something past it; if one ever
+// arrives, the answer is to show nothing rather than to show part of it.
+var EXEC_MAX_ELEMENTS = 12
+var EXEC_MAX_ELEMENT_CHARS = 160
+var EXEC_MAX_TOTAL_CHARS = 800
+
+function argvDisplayable(lines) {
+  if (lines.length === 0 || lines.length > EXEC_MAX_ELEMENTS) return false
+  var total = 0
+  for (var i = 0; i < lines.length; i++) {
+    if (lines[i].length > EXEC_MAX_ELEMENT_CHARS) return false
+    total += lines[i].length
+  }
+  return total <= EXEC_MAX_TOTAL_CHARS
+}
+
+// A consent request is written by a process on the other side of a socket, so
+// nothing in it is trusted as a shape: every field is read defensively and a
+// request that does not parse is no request at all. Nothing here shortens the
+// subject — a request whose subject cannot be shown whole is dropped, because
+// a truncated question is a question about something else.
 function readConsentRequest(text) {
   var raw = null
   try { raw = JSON.parse(String(text || "")) } catch (e) { return null }
   if (!raw || typeof raw !== "object") return null
   var id = String(raw.id || "")
   var kind = String(raw.kind || "")
-  if (id === "" || (kind !== "host" && kind !== "exec")) return null
+  var digest = String(raw.digest || "")
+  if (id === "" || digest === "" || (kind !== "host" && kind !== "exec")) return null
   var expires = Number(raw.expiresAt)
-  return {
+  var request = {
     id: id,
     kind: kind,
+    digest: digest,
     title: shapeBubbleText(String(raw.title || "Allow this?"), 120),
-    detail: shapeBubbleText(String(raw.detail || ""), 240),
-    host: kind === "host" ? String(raw.host || "") : "",
+    lines: [],
+    argv: [],
+    cwd: "",
+    host: "",
     // Only a host is worth remembering. A command is a one-off by nature,
     // and an "always" on one would be a standing permission to run anything.
     repeatable: kind === "host",
     expiresAt: isFinite(expires) ? expires : 0
   }
+  if (kind === "host") {
+    var host = String(raw.host || "")
+    var port = Number(raw.port)
+    if (!/^[a-zA-Z0-9]([a-zA-Z0-9.-]{0,252}[a-zA-Z0-9])?$/.test(host)) return null
+    request.host = host
+    request.lines = [host + (isFinite(port) && port > 0 ? " port " + String(port) : "")]
+    return request
+  }
+  if (!Array.isArray(raw.argv) || raw.argv.length === 0) return null
+  var argv = []
+  for (var i = 0; i < raw.argv.length; i++) {
+    if (typeof raw.argv[i] !== "string") return null
+    argv.push(raw.argv[i])
+  }
+  var lines = renderArgv(argv)
+  if (!argvDisplayable(lines)) return null
+  request.argv = argv
+  request.lines = lines
+  request.cwd = String(raw.cwd || "")
+  return request
 }
 
-function consentVerdict(id, verdict) {
+// The answer carries the subject back. A verdict without the digest of the
+// exact thing that was displayed cannot be applied to anything, which is what
+// stops one from being replayed onto a different command or landing on one
+// that changed while the card was open.
+function consentVerdict(id, verdict, digest) {
   var choice = verdict === "allow" || verdict === "always" ? verdict : "deny"
-  return JSON.stringify({ id: String(id || ""), verdict: choice }) + "\n"
+  return JSON.stringify({
+    id: String(id || ""),
+    verdict: choice,
+    digest: String(digest || "")
+  }) + "\n"
 }
 
+// What the last turn staged, kept whole. The scan's own identifiers travel
+// with it — which staging layer, which work directory, and a digest over the
+// complete set — because the approval has to name the thing that was read,
+// not be recomputed from live configuration when the button is pressed.
 function readStagedChanges(text) {
+  var empty = {
+    stageId: "", workdir: "", workdirId: "", digest: "",
+    count: 0, complete: true, changes: []
+  }
   var raw = null
-  try { raw = JSON.parse(String(text || "")) } catch (e) { return { count: 0, changes: [] } }
-  if (!raw || typeof raw !== "object") return { count: 0, changes: [] }
+  try { raw = JSON.parse(String(text || "")) } catch (e) { return empty }
+  if (!raw || typeof raw !== "object") return empty
   var list = Array.isArray(raw.changes) ? raw.changes : []
   var out = []
   for (var i = 0; i < list.length; i++) {
@@ -586,27 +678,81 @@ function readStagedChanges(text) {
     if (!item || typeof item !== "object") continue
     var path = String(item.path || "")
     var kind = String(item.kind || "")
-    if (path === "" || path.indexOf("..") === 0) continue
-    out.push({ path: path, kind: kind })
+    // A path that climbs out of the work directory is not a change this can
+    // describe honestly, and the warden refuses to publish what it cannot
+    // describe. Dropping it here would under-report the set, so the whole
+    // scan is treated as unreadable instead.
+    if (path === "" || path.indexOf("/") === 0
+        || path === ".." || path.indexOf("../") === 0 || path.indexOf("/../") !== -1)
+      return empty
+    out.push({
+      path: path,
+      kind: kind,
+      bytes: Number(item.bytes) || 0,
+      mode: String(item.mode || ""),
+      sha256: String(item.sha256 || ""),
+      target: String(item.target || "")
+    })
   }
   var count = Number(raw.count)
-  return { count: isFinite(count) && count >= 0 ? count : out.length, changes: out }
+  var total = isFinite(count) && count >= 0 ? count : out.length
+  return {
+    stageId: String(raw.stageId || ""),
+    workdir: String(raw.workdir || ""),
+    workdirId: String(raw.workdirId || ""),
+    digest: String(raw.digest || ""),
+    count: total,
+    // Complete means every entry in the set is in this list. When it is not,
+    // there is no honest way to ask for approval of the whole thing.
+    complete: raw.complete !== false && out.length === total,
+    changes: out
+  }
 }
 
-// The sentence the user is asked to approve. Naming the first few files is
-// the difference between consenting to a number and consenting to a change.
-function describeStagedChanges(staged, workdir) {
-  var data = staged && typeof staged === "object" ? staged : ({ count: 0, changes: [] })
+// One line per change, with the part that makes it consequential on it: what
+// a link points at, how big a file is and the head of its hash. This is the
+// list the approval covers, so nothing is summarised away.
+function renderStagedChanges(staged) {
+  var data = staged && typeof staged === "object" ? staged : ({ changes: [] })
+  var list = Array.isArray(data.changes) ? data.changes : []
+  var lines = []
+  for (var i = 0; i < list.length; i++) {
+    var change = list[i]
+    var line = change.kind + "  " + change.path
+    if (change.kind === "link") line += "  →  " + change.target
+    else if (change.kind === "add" || change.kind === "modify")
+      line += "  (" + String(change.bytes) + " B, " + change.mode
+        + ", " + change.sha256.slice(0, 12) + ")"
+    lines.push(line)
+  }
+  return lines
+}
+
+// The headline over that list. It counts; it never stands in for it.
+function summariseStagedChanges(staged, workdir) {
+  var data = staged && typeof staged === "object" ? staged : ({ count: 0 })
   var count = Number(data.count) || 0
   if (count <= 0) return ""
-  var names = []
-  var list = Array.isArray(data.changes) ? data.changes : []
-  for (var i = 0; i < list.length && names.length < 3; i++) names.push(list[i].path)
-  var head = count === 1 ? "1 file" : String(count) + " files"
   var where = String(workdir || "")
-  var tail = names.join(", ")
-  if (count > names.length) tail += ", …"
-  return head + (where === "" ? "" : " in " + where) + ": " + tail
+  return (count === 1 ? "1 file" : String(count) + " files")
+    + (where === "" ? "" : " in " + where)
+}
+
+// Publishing or discarding names the staging layer that was reviewed and the
+// digest of what was read there. The warden re-derives both before it acts,
+// so an approval cannot land on a set that has moved underneath it.
+function buildStageCommand(warden, verb, staged, state) {
+  var path = String(warden || "")
+  var action = verb === "apply" ? "apply" : verb === "discard" ? "discard" : ""
+  var data = staged && typeof staged === "object" ? staged : null
+  if (path === "" || action === "" || data === null) return null
+  if (!data.workdir || !data.stageId) return null
+  if (action === "apply" && (!data.digest || !data.complete)) return null
+  var command = [path, action]
+  if (state) command.push("--state", String(state))
+  command.push("--workdir", data.workdir, "--stage", data.stageId)
+  if (action === "apply") command.push("--expect", data.digest)
+  return command
 }
 
 // Put a long-running child in its own process group, behind a guardian that is
@@ -1515,7 +1661,10 @@ if (typeof module !== "undefined") {
     readConsentRequest: readConsentRequest,
     consentVerdict: consentVerdict,
     readStagedChanges: readStagedChanges,
-    describeStagedChanges: describeStagedChanges,
+    renderStagedChanges: renderStagedChanges,
+    summariseStagedChanges: summariseStagedChanges,
+    buildStageCommand: buildStageCommand,
+    renderArgv: renderArgv,
     buildGuardedRunner: buildGuardedRunner,
     canTalkTo: canTalkTo,
     canOpenConsole: canOpenConsole,

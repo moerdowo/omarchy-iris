@@ -1200,39 +1200,125 @@ test("the briefing tells the agent where the walls are", () => {
 test("a consent request is read defensively or not at all", () => {
   assert.equal(M.readConsentRequest(""), null)
   assert.equal(M.readConsentRequest("not json"), null)
-  assert.equal(M.readConsentRequest('{"id":"1"}'), null, "a request needs a known kind")
-  assert.equal(M.readConsentRequest('{"kind":"host","host":"x.com"}'), null, "and an id")
-  assert.equal(M.readConsentRequest('{"id":"1","kind":"sudo"}'), null)
+  assert.equal(M.readConsentRequest('{"id":"1","digest":"d"}'), null, "a request needs a known kind")
+  assert.equal(M.readConsentRequest('{"kind":"host","host":"x.com","digest":"d"}'), null, "and an id")
+  assert.equal(M.readConsentRequest('{"id":"1","kind":"sudo","digest":"d"}'), null)
+  assert.equal(M.readConsentRequest('{"id":"1","kind":"exec","argv":["a"]}'), null,
+    "and a digest, or there is nothing to bind the answer to")
   const host = M.readConsentRequest(JSON.stringify({
-    id: "7", kind: "host", title: "Let the agent reach x.com?", detail: "d", host: "x.com" }))
+    id: "7", kind: "host", digest: "sha256:h", title: "Let the agent reach x.com?",
+    host: "x.com", port: 443 }))
   assert.equal(host.id, "7")
   assert.equal(host.repeatable, true, "a host is worth remembering")
+  assert.deepEqual(host.lines, ["x.com port 443"])
   const exec = M.readConsentRequest(JSON.stringify({
-    id: "8", kind: "exec", title: "Run this?", detail: "hyprctl dispatch exec spotify" }))
+    id: "8", kind: "exec", digest: "sha256:e", title: "Run this?",
+    argv: ["hyprctl", "dispatch", "exec", "spotify"], cwd: "/home/u/Work" }))
   assert.equal(exec.repeatable, false, "a command never is")
-  assert.equal(exec.host, "")
+  assert.equal(exec.cwd, "/home/u/Work")
 })
 
-test("a verdict is one of three words, and anything else is a refusal", () => {
-  assert.deepEqual(JSON.parse(M.consentVerdict("7", "allow")), { id: "7", verdict: "allow" })
-  assert.deepEqual(JSON.parse(M.consentVerdict("7", "always")), { id: "7", verdict: "always" })
-  assert.deepEqual(JSON.parse(M.consentVerdict("7", "deny")), { id: "7", verdict: "deny" })
+test("the command shown is the command run, element by element", () => {
+  // The finding this exists for: a command flattened with spaces and cut at a
+  // character count lets an agent put the consequential half past the cut,
+  // and hides where one argument ends and the next begins.
+  const argv = ["/usr/bin/bash", "-c", "echo hi; rm -rf ~/Documents", "a b", "", "x\ny"]
+  const request = M.readConsentRequest(JSON.stringify({
+    id: "9", kind: "exec", digest: "sha256:e", argv: argv, cwd: "/home/u/Work" }))
+  assert.equal(request.lines.length, argv.length, "every element gets its own line")
+  assert.deepEqual(request.argv, argv, "and the structured argv survives")
+  // boundaries are visible, and so is everything that would otherwise not be
+  assert.equal(request.lines[2], '3 "echo hi; rm -rf ~/Documents"')
+  assert.equal(request.lines[3], '4 "a b"')
+  assert.equal(request.lines[4], '5 ""', "an empty argument is still an argument")
+  assert.equal(request.lines[5], '6 "x\\ny"', "a newline cannot hide a line")
+  assert.equal(M.renderArgv(['say "hi"'])[0], '1 "say \\"hi\\""')
+  assert.equal(M.renderArgv(["a\u0007b"])[0], '1 "a\\x07b"', "nor can a bell")
+  // nothing anywhere shortens it: what cannot be shown whole is not shown
+  for (const oversized of [
+    { argv: Array(13).fill("x") },
+    { argv: ["y".repeat(400)] },
+    { argv: Array(12).fill("z".repeat(100)) }
+  ])
+    assert.equal(M.readConsentRequest(JSON.stringify(Object.assign(
+      { id: "9", kind: "exec", digest: "sha256:e" }, oversized))), null,
+      "an unshowable command is dropped, never trimmed")
+})
+
+test("a verdict names the subject it is an answer to", () => {
+  const verdict = JSON.parse(M.consentVerdict("7", "allow", "sha256:abc"))
+  assert.deepEqual(verdict, { id: "7", verdict: "allow", digest: "sha256:abc" })
+  assert.equal(JSON.parse(M.consentVerdict("7", "always", "d")).verdict, "always")
   for (const bogus of ["yes", "", null, undefined, "ALLOW", 1])
-    assert.equal(JSON.parse(M.consentVerdict("7", bogus)).verdict, "deny")
+    assert.equal(JSON.parse(M.consentVerdict("7", bogus, "d")).verdict, "deny")
+  assert.equal(JSON.parse(M.consentVerdict("7", "allow")).digest, "",
+    "and an answer with no subject binds to nothing")
 })
 
-test("staged changes are counted, named, and never named as an escape", () => {
-  assert.deepEqual(M.readStagedChanges("nonsense"), { count: 0, changes: [] })
+test("staged changes are kept whole, with what makes each one consequential", () => {
+  const scan = {
+    schemaVersion: 2, stageId: "abc123", workdir: "/home/u/Work", workdirId: "55:9",
+    digest: "sha256:stage", count: 4, complete: true,
+    changes: [
+      { path: "a.md", kind: "modify", bytes: 12, mode: "0644", sha256: "deadbeefcafebabe11" },
+      { path: "new.sh", kind: "add", bytes: 40, mode: "0755", sha256: "0123456789abcdef22" },
+      { path: "keys", kind: "link", target: "/home/u/.ssh/id_ed25519" },
+      { path: "old.txt", kind: "delete" }
+    ]
+  }
+  const staged = M.readStagedChanges(JSON.stringify(scan))
+  assert.equal(staged.stageId, "abc123")
+  assert.equal(staged.workdir, "/home/u/Work")
+  assert.equal(staged.digest, "sha256:stage")
+  assert.equal(staged.complete, true)
+  const lines = M.renderStagedChanges(staged)
+  assert.equal(lines.length, 4, "every change is shown, not the first three")
+  // a link's target is the whole point of the link
+  assert.equal(lines[2], "link  keys  \u2192  /home/u/.ssh/id_ed25519")
+  assert.match(lines[0], /modify {2}a\.md {2}\(12 B, 0644, deadbeefcafe\)/)
+  assert.equal(lines[3], "delete  old.txt")
+  assert.equal(M.summariseStagedChanges(staged, "~/Work"), "4 files in ~/Work")
+})
+
+test("a scan that cannot be trusted or shown whole is not approvable", () => {
+  assert.deepEqual(M.readStagedChanges("nonsense").changes, [])
+  // a path that climbs out is not describable, so the whole scan is refused
+  // rather than silently under-reported
+  const escaping = M.readStagedChanges(JSON.stringify({
+    stageId: "a", workdir: "/w", digest: "d", count: 2, complete: true,
+    changes: [{ path: "ok.txt", kind: "add" }, { path: "../../etc/passwd", kind: "add" }] }))
+  assert.equal(escaping.count, 0)
+  assert.equal(escaping.stageId, "")
+  // a list shorter than its own count is not a complete list
+  const partial = M.readStagedChanges(JSON.stringify({
+    stageId: "a", workdir: "/w", digest: "d", count: 9000, complete: false,
+    changes: [{ path: "a.txt", kind: "add" }] }))
+  assert.equal(partial.complete, false)
+  assert.equal(partial.count, 9000)
+  assert.equal(M.buildStageCommand("/w", "apply", partial), null,
+    "and an incomplete set cannot be published at all")
+  assert.ok(M.buildStageCommand("/w", "discard", partial), "though it can be thrown away")
+})
+
+test("publishing names the stage that was reviewed and the digest that was read", () => {
+  // The finding this exists for: recomputing the work directory when the
+  // button is pressed can retarget an approval onto a different, older stage.
   const staged = M.readStagedChanges(JSON.stringify({
-    count: 3,
-    changes: [{ path: "a.md", kind: "modify" }, { path: "../etc/passwd", kind: "add" },
-              { path: "notes/b.md", kind: "add" }]
-  }))
-  assert.deepEqual(staged.changes.map(c => c.path), ["a.md", "notes/b.md"])
-  assert.equal(M.describeStagedChanges(staged, "~/Work"), "3 files in ~/Work: a.md, notes/b.md, …")
-  assert.equal(M.describeStagedChanges({ count: 1, changes: [{ path: "a.md" }] }, "~/Work"),
-    "1 file in ~/Work: a.md")
-  assert.equal(M.describeStagedChanges({ count: 0, changes: [] }, "~/Work"), "")
+    stageId: "abc123", workdir: "/home/u/Work", workdirId: "55:9",
+    digest: "sha256:stage", count: 1, complete: true,
+    changes: [{ path: "a.md", kind: "modify", bytes: 1, mode: "0644", sha256: "aa" }] }))
+  assert.deepEqual(M.buildStageCommand("/p/iris-warden", "apply", staged, "/s/warden"),
+    ["/p/iris-warden", "apply", "--state", "/s/warden",
+     "--workdir", "/home/u/Work", "--stage", "abc123", "--expect", "sha256:stage"])
+  assert.deepEqual(M.buildStageCommand("/p/iris-warden", "discard", staged),
+    ["/p/iris-warden", "discard", "--workdir", "/home/u/Work", "--stage", "abc123"])
+  assert.equal(M.buildStageCommand("", "apply", staged), null)
+  assert.equal(M.buildStageCommand("/p/iris-warden", "publish", staged), null)
+  assert.equal(M.buildStageCommand("/p/iris-warden", "apply", null), null)
+  assert.equal(M.buildStageCommand("/p/iris-warden", "apply",
+    Object.assign({}, staged, { digest: "" })), null, "no digest, no publication")
+  assert.equal(M.buildStageCommand("/p/iris-warden", "apply",
+    Object.assign({}, staged, { stageId: "" })), null, "no stage, no publication")
 })
 
 test("a preflight report is a verdict about this machine, not a hope", () => {

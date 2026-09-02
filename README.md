@@ -143,9 +143,32 @@ exact subject in it:
 
 | It wants to | You see | You answer |
 | --- | --- | --- |
-| reach a host that is not its own API | the hostname | Allow · Always · Deny |
-| run a command out here | the exact command line | Allow · Deny |
-| publish what it wrote | the file count and names | Apply · Discard |
+| reach a host that is not its own API | the hostname and port | Allow · Always · Deny |
+| run a command out here | every argument, one per line | Allow · Deny |
+| publish what it wrote | every change, with link targets and hashes | Apply · Discard |
+
+Two properties hold for all three.
+
+**Exact.** What you are shown is what happens. A command is drawn element by
+element, numbered and quoted, with control characters made visible — argument
+boundaries are part of the display, because that is where something would
+otherwise be hidden. Nothing on the path to the screen shortens it: a command
+too long to render in full is *refused* rather than trimmed, and the agent is
+told to break the work into steps that can be shown. A staged change set is
+listed in full, every entry, with what makes it consequential: what a link
+points at, and each file's size, mode and content hash.
+
+**Bound.** Your answer names the thing you answered about. Every question
+carries a digest of its canonical subject and every verdict carries that
+digest back, so an approval cannot be replayed onto a different command. A
+review keeps the staging layer, work directory and digest it was made from,
+and publishing re-derives that digest at the moment it acts — if a path, a
+type, a mode, a link target, a byte of content or the work directory itself
+changed after you read it, nothing is published and you are asked again. A
+turn and a publication cannot be in the staging layer at the same time.
+
+When a change set is too large to show whole, Iris counts it, digests it, and
+declines to offer **Apply** at all. It will not ask you to approve a summary.
 
 Answer on the companion, in the bar popout with a keyboard, or over IPC:
 

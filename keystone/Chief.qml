@@ -203,10 +203,18 @@ Item {
   // with its exact subject in it and waits for a person. It outranks every
   // other overlay: an unanswered question is a turn that is standing still.
   property string consentTitle: ""
-  property string consentDetail: ""
+  // The subject, one line per element, exactly as it will be acted on. Never
+  // a sentence built out of it: a command joined with spaces cannot show
+  // where one argument ends and the next begins, and that is precisely where
+  // something would be hidden. Nothing below elides these.
+  property var consentLines: []
+  property string consentNote: ""
   property string consentAllow: "Allow"
   property string consentDeny: "Deny"
   property bool consentRepeatable: false
+  // False when the subject cannot be shown whole — a change set too large to
+  // read. Then the only answer offered is the refusal.
+  property bool consentCanAllow: true
   readonly property bool consenting: consentTitle !== ""
   signal consentAnswered(string verdict)
 
@@ -1214,7 +1222,7 @@ Item {
     borderSpec: Border.flat(Color.urgent, Math.max(1, Style.normalBorderWidth))
     radius: Style.cornerRadius
     width: Math.min(pet.overlayWidthCap,
-                    Math.max(Math.min(pet.overlayWidthCap, Style.space(120)),
+                    Math.max(Math.min(pet.overlayWidthCap, Style.space(140)),
                              consentMetrics.advanceWidth + Style.space(26)))
     height: consentContent.implicitHeight + Style.space(16)
     x: pet.overlayX(width)
@@ -1223,7 +1231,7 @@ Item {
     Accessible.role: Accessible.Dialog
     Accessible.ignored: !visible
     Accessible.name: pet.consentTitle
-    Accessible.description: pet.consentDetail
+    Accessible.description: pet.consentLines.join("; ") + " " + pet.consentNote
 
     Column {
       id: consentContent
@@ -1234,23 +1242,53 @@ Item {
         width: parent.width
         text: pet.consentTitle
         wrapMode: Text.WordWrap
-        maximumLineCount: 3
-        elide: Text.ElideRight
         color: Color.popups.text
         font.family: Style.font.family
         font.pixelSize: Style.font.subtitle
         Accessible.ignored: true
       }
 
-      // The subject of the question, verbatim: the host, the command, the
-      // files. Consenting to a summary is not consenting.
+      // The subject itself. It scrolls when it is long, and it is never cut:
+      // a consent card that elides is a card that asks about one thing and
+      // shows another. The warden refuses to ask about anything that cannot
+      // be rendered whole, so this stays bounded in practice.
+      Flickable {
+        id: consentScroll
+        width: parent.width
+        height: Math.min(Style.space(180), subjectColumn.implicitHeight)
+        contentHeight: subjectColumn.implicitHeight
+        clip: true
+        interactive: contentHeight > height
+        boundsBehavior: Flickable.StopAtBounds
+
+        Column {
+          id: subjectColumn
+          width: consentScroll.width
+          spacing: Style.space(2)
+
+          Repeater {
+            model: pet.consentLines
+            Text {
+              required property string modelData
+              width: subjectColumn.width
+              text: modelData
+              wrapMode: Text.WrapAnywhere
+              elide: Text.ElideNone
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              Accessible.ignored: true
+            }
+          }
+        }
+      }
+
       Text {
         width: parent.width
-        visible: pet.consentDetail !== ""
-        text: pet.consentDetail
-        wrapMode: Text.WrapAnywhere
-        maximumLineCount: 3
-        elide: Text.ElideRight
+        visible: pet.consentNote !== ""
+        text: pet.consentNote
+        wrapMode: Text.WordWrap
+        elide: Text.ElideNone
         color: Qt.darker(Color.popups.text, 1.35)
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
@@ -1260,17 +1298,20 @@ Item {
       Row {
         id: consentButtons
         spacing: Style.space(6)
-        readonly property int slots: pet.consentRepeatable ? 3 : 2
+        readonly property int slots:
+          (pet.consentCanAllow ? 1 : 0) + (pet.consentRepeatable ? 1 : 0) + 1
         readonly property real slotWidth:
           (consentContent.width - spacing * (slots - 1)) / slots
 
         Repeater {
-          model: pet.consentRepeatable
-            ? [{ verdict: "deny", label: pet.consentDeny, strong: false },
-               { verdict: "allow", label: pet.consentAllow, strong: true },
-               { verdict: "always", label: "Always", strong: false }]
-            : [{ verdict: "deny", label: pet.consentDeny, strong: false },
-               { verdict: "allow", label: pet.consentAllow, strong: true }]
+          model: {
+            var actions = [{ verdict: "deny", label: pet.consentDeny, strong: false }]
+            if (pet.consentCanAllow)
+              actions.push({ verdict: "allow", label: pet.consentAllow, strong: true })
+            if (pet.consentCanAllow && pet.consentRepeatable)
+              actions.push({ verdict: "always", label: "Always", strong: false })
+            return actions
+          }
 
           BorderSurface {
             required property var modelData

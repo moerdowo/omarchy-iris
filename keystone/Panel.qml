@@ -62,6 +62,13 @@ Panel {
   // find the creature with a mouse.
   readonly property var consent: ready && service.activeConsent ? service.activeConsent : null
   readonly property bool consentIsReview: consent !== null && String(consent.kind) === "apply"
+  // Every element of the subject, in order. The panel scrolls, so unlike the
+  // companion's card there is no size at which this has to stop — which is
+  // why a change set too large for the card is still readable here.
+  readonly property var consentLines: consent !== null && Array.isArray(consent.lines)
+    ? consent.lines : []
+  // A subject that cannot be shown whole cannot be approved from anywhere.
+  readonly property bool consentCanAllow: consent !== null && consent.canAllow !== false
   readonly property bool sandboxChecked: ready && service.sandboxProbed === true
   readonly property bool sandboxOn: ready && service.sandboxReady === true
   readonly property bool canWalk: ready && service.stillPet !== true
@@ -271,10 +278,11 @@ Panel {
   function contextBody() {
     if (!ready) return "The desktop service is loading."
     if (consent !== null) {
-      var subject = String(consent.detail)
+      // The subject is rendered as its own list below, line by line and
+      // unelided. This body says only what the answer means.
       return consentIsReview
-        ? subject + "\n\nThe agent wrote these into a staging layer. Nothing has changed on disk yet."
-        : subject + "\n\nThe sandbox cannot do this by itself. Nothing happens unless you allow it."
+        ? String(consent.note || "")
+        : "The sandbox cannot do this by itself. Nothing happens unless you allow it."
     }
     if (sandboxChecked && !sandboxOn && canBubble)
       return "Unattended orders go to the console here: " + String(service.sandboxWhyNot || "no sandbox")
@@ -339,6 +347,7 @@ Panel {
   // without answering it, because the thing on the other side is waiting.
   function answerConsent(allow) {
     if (!service || consent === null) return
+    if (allow && !consentCanAllow) return
     if (typeof service.answerActiveConsent === "function")
       service.answerActiveConsent(allow ? "allow" : "deny")
   }
@@ -435,7 +444,8 @@ Panel {
       case "settings": return overviewHero
       case "back": return settingsHero
       case "primary": return primaryButton
-      case "consent": return consentCursor === 0 ? consentAllowButton : consentDenyButton
+      case "consent":
+        return consentCursor === 0 && consentCanAllow ? consentAllowButton : consentDenyButton
       case "quick": return quickCursor === 0 ? consoleButton : tuckButton
       case "utility": {
         var action = currentUtilityAction()
@@ -487,7 +497,8 @@ Panel {
   }
 
   function syncGroupCursor() {
-    if (focusId === "consent") consentCursor = Math.max(0, Math.min(1, consentCursor))
+    if (focusId === "consent")
+      consentCursor = consentCanAllow ? Math.max(0, Math.min(1, consentCursor)) : 1
     else if (focusId === "quick") quickCursor = Math.max(0, Math.min(1, quickCursor))
     else if (focusId === "utility") syncUtilityAction()
     else if (focusId === "conversation")
@@ -554,7 +565,9 @@ Panel {
 
   function moveHorizontal(delta) {
     if (revealCursor()) return
-    if (focusId === "consent") consentCursor = Math.max(0, Math.min(1, consentCursor + delta))
+    if (focusId === "consent")
+      consentCursor = consentCanAllow
+        ? Math.max(0, Math.min(1, consentCursor + delta)) : 1
     else if (focusId === "quick") quickCursor = Math.max(0, Math.min(1, quickCursor + delta))
     else if (focusId === "utility") {
       var actions = utilityActions()
@@ -772,6 +785,43 @@ Panel {
               }
             }
 
+            // The subject, line by line, with nothing elided and no cap: the
+            // panel is the surface that can always show a change set in full.
+            BorderSurface {
+              width: parent.width
+              visible: root.consent !== null && root.consentLines.length > 0
+              implicitHeight: subjectColumn.implicitHeight + Style.spacing.rowPaddingX
+              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.04)
+              borderSpec: Border.flat(
+                Qt.rgba(root.urgent.r, root.urgent.g, root.urgent.b, 0.35), 1)
+              radius: Style.cornerRadius
+
+              Column {
+                id: subjectColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.spacing.rowPaddingX
+                anchors.rightMargin: Style.spacing.rowPaddingX
+                spacing: Style.spacing.xs
+
+                Repeater {
+                  model: root.consentLines
+                  Text {
+                    required property string modelData
+                    width: subjectColumn.width
+                    text: modelData
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WrapAnywhere
+                    elide: Text.ElideNone
+                  }
+                }
+              }
+            }
+
             // Two buttons, both explicit, neither of them a default. The
             // urgent one is the refusal, because the cheap answer to a
             // question about something irreversible should be no.
@@ -780,10 +830,12 @@ Panel {
               visible: root.consent !== null
               spacing: Style.spacing.md
 
-              readonly property real cellWidth: (width - spacing) / 2
+              readonly property real cellWidth:
+                root.consentCanAllow ? (width - spacing) / 2 : width
 
               Button {
                 id: consentAllowButton
+                visible: root.consentCanAllow
                 width: parent.cellWidth
                 text: root.consentIsReview ? "Apply" : "Allow"
                 iconText: root.consentIsReview ? "󰆓" : "󰄬"
