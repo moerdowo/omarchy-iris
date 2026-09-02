@@ -51,7 +51,13 @@ test("preflight answers about this machine, in JSON, either way", () => {
   assert.equal(report.schemaVersion, 1)
   assert.equal(typeof report.ok, "boolean")
   assert.equal(done.status, report.ok ? 0 : 1)
-  if (!report.ok) assert.ok(report.reasons.length > 0, "a refusal says why")
+  if (!report.ok) {
+    assert.ok(report.reasons.length > 0, "a refusal says why")
+    // The reason reaches a bubble on someone's desktop. "Unknown option
+    // --overlay-src" is true and useless; a version they can act on is not.
+    assert.doesNotMatch(report.reasons[0], /Unknown option/,
+      "an old bubblewrap should be reported as an old bubblewrap")
+  }
 })
 
 test("an unknown work directory has staged nothing", () => {

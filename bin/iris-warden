@@ -1066,6 +1066,25 @@ def cmd_discard(args):
     return 0
 
 
+# `--overlay` arrived in bubblewrap 0.9. Below that the probe fails with
+# "Unknown option --overlay-src", which is true and tells a user nothing they
+# can act on.
+OVERLAY_SINCE = (0, 9, 0)
+
+
+def bwrap_version():
+    try:
+        done = subprocess.run(["bwrap", "--version"], capture_output=True,
+                              text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None, ""
+    printed = (done.stdout or done.stderr).strip()
+    found = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", printed)
+    if not found:
+        return None, printed
+    return (int(found.group(1)), int(found.group(2)), int(found.group(3) or 0)), printed
+
+
 def cmd_preflight(args):
     """Can this machine actually enforce the boundary, right now?
 
@@ -1078,6 +1097,15 @@ def cmd_preflight(args):
     report["bwrap"] = bwrap
     if not bwrap:
         report["reasons"].append("bubblewrap is not installed")
+        json.dump(report, sys.stdout)
+        sys.stdout.write("\n")
+        return 1
+    version, printed = bwrap_version()
+    report["version"] = printed
+    if version is not None and version < OVERLAY_SINCE:
+        report["reasons"].append(
+            "bubblewrap %s is too old: staging writes needs 0.9 or newer"
+            % ".".join(str(part) for part in version))
         json.dump(report, sys.stdout)
         sys.stdout.write("\n")
         return 1

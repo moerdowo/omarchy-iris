@@ -41,7 +41,8 @@ none of its state.
 - **Runtime:** Omarchy 4, including its Quickshell/Hyprland integration,
   `bash`, `python3`, `jq`, and the regular `omarchy-*` helpers. Omarchy Iris installs no
   system package, daemon, hook, or background unit of its own.
-- **Unattended orders:** `bubblewrap` (`sudo pacman -S bubblewrap`), plus a
+- **Unattended orders:** `bubblewrap` 0.9 or newer (`sudo pacman -S
+  bubblewrap`; the staging overlay needs `--overlay`, which 0.9 added), plus a
   kernel with unprivileged user namespaces and unprivileged overlayfs — both
   are on by default on Arch and Omarchy. Without them the companion still
   works and orders go to the console instead. See [The sandbox](#the-sandbox).
