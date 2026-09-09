@@ -83,16 +83,27 @@ Item {
   readonly property string entryId: manifest && manifest.id ? String(manifest.id)
                                                             : "io.github.moerdowo.omarchyiris"
   readonly property var entrySettings: {
-    if (!shell || !shell.shellConfig) return null
+    if (!shell) return null
+    // Omarchy 4.0.3 withdrew `shellConfig` from the plugin shell facade
+    // (services/PluginShellApi.qml): a third-party plugin no longer sees the
+    // whole of shell.json. Without a fallback this returns null, every setting
+    // on the bar entry is ignored, and the companion silently wears its
+    // defaults instead of what the user chose.
+    //
+    // `barConfig` is what replaced it for this purpose — a deep copy of the
+    // `bar` subtree, so it still carries `layout` and the entry's settings.
+    // Only the top-level `plugins[]` sweep below is beyond its reach, and a
+    // bar widget's settings live on its layout entry.
     var c = shell.shellConfig
     var sections = ["left", "center", "right"]
-    var lay = c.bar && c.bar.layout ? c.bar.layout : ({})
+    var lay = c && c.bar && c.bar.layout ? c.bar.layout
+            : (shell.barConfig && shell.barConfig.layout ? shell.barConfig.layout : ({}))
     for (var s = 0; s < sections.length; s++) {
       var arr = lay[sections[s]]
       for (var i = 0; arr && i < arr.length; i++)
         if (arr[i] && String(arr[i].id) === entryId) return arr[i]
     }
-    var ps = Array.isArray(c.plugins) ? c.plugins : []
+    var ps = c && Array.isArray(c.plugins) ? c.plugins : []
     for (var j = 0; j < ps.length; j++)
       if (ps[j] && String(ps[j].id) === entryId) return ps[j]
     return null
