@@ -26,8 +26,31 @@ Item {
 
   // The shell hands panels their manifest; __sourceDir is how the plugin
   // finds the tools it ships with.
+  //
+  // Omarchy 4.0.3 stopped supplying it: `publicPluginManifest()` in shell.qml
+  // deep-copies a third-party manifest and deletes `__sourceDir` (along with
+  // `__isFirstParty` and `__hostCapabilities`), so only first-party plugins
+  // still see it. An empty pluginDir means no pet directories, which means no
+  // body is ever loaded and the companion never appears at all.
+  //
+  // So derive it from this file's own location instead, which needs nothing
+  // from the host: Service.qml sits in keystone/, and resolving a file that is
+  // known to sit beside the plugin root gives an absolute URL whose tail is
+  // fixed regardless of how the host mounted us. Anchored on manifest.json
+  // rather than on the directory form of the URL, so nothing depends on
+  // whether a trailing slash comes back.
   property var manifest: ({})
-  readonly property string pluginDir: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
+  readonly property string pluginDir: {
+    if (manifest && manifest.__sourceDir) return String(manifest.__sourceDir)
+
+    var anchor = "/manifest.json"
+    var u = String(Qt.resolvedUrl(".." + anchor))
+    if (u === "") return ""
+    if (u.indexOf("file://") === 0) u = u.slice(7)
+    try { u = decodeURIComponent(u) } catch (e) { }
+    return u.length > anchor.length && u.slice(-anchor.length) === anchor
+      ? u.slice(0, u.length - anchor.length) : ""
+  }
 
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")
