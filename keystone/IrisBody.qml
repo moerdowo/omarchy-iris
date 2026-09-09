@@ -60,6 +60,12 @@ Canvas {
   anchors.fill: parent
   anchors.margins: -overflow
   renderTarget: Canvas.Image
+  // Paint off the GUI thread. The band is redrawn 30 times a second for as long
+  // as the orb is on screen, and every frame builds gradients and composites
+  // with "lighter" — measured at ~88% of a core on this machine, all of it on
+  // the thread that also drives every animation in the shell. Threaded costs the
+  // same CPU but stops it blocking the scene graph, so the bar keeps its frames.
+  renderStrategy: Canvas.Threaded
   antialiasing: true
 
   /**
